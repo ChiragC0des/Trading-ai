@@ -1,0 +1,6 @@
+{
+  "name": "Horizon OS AI Trading",
+  "description": "Advanced AI-powered trading terminal with real-time portfolio composite growth tracking, strategy lab, automated insights, sentiment logs, and high-fidelity interactive charting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

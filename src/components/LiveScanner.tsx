@@ -22,7 +22,7 @@ interface LiveScannerProps {
 export default function LiveScanner({ assets, onNavigateToIntelligence }: LiveScannerProps) {
   // Search & Filtering states
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<"ALL" | "EQUITIES" | "FOREX">("ALL");
+  const [selectedCategory, setSelectedCategory] = useState<"ALL" | "EQUITIES" | "CRYPTO" | "FOREX">("ALL");
   const [selectedRating, setSelectedRating] = useState<string>("ALL");
   const [sortBy, setSortBy] = useState<"score" | "ticker" | "price" | "change" | "mass" | "velocity">("score");
 
@@ -44,9 +44,13 @@ export default function LiveScanner({ assets, onNavigateToIntelligence }: LiveSc
       
       // 2. Category filter
       const isFx = asset.symbol.endsWith("=X");
+      const isCrypto = asset.symbol.includes("/");
+      const isEquity = !isFx && !isCrypto;
+
       const matchesCategory = 
         selectedCategory === "ALL" ||
-        (selectedCategory === "EQUITIES" && !isFx) ||
+        (selectedCategory === "EQUITIES" && isEquity) ||
+        (selectedCategory === "CRYPTO" && isCrypto) ||
         (selectedCategory === "FOREX" && isFx);
 
       // 3. Rating filter
@@ -124,8 +128,8 @@ export default function LiveScanner({ assets, onNavigateToIntelligence }: LiveSc
           </div>
 
           {/* Category Selector */}
-          <div className="lg:col-span-3 flex bg-slate-50 p-1 rounded-xl">
-            {(["ALL", "EQUITIES", "FOREX"] as const).map((cat) => (
+          <div className="lg:col-span-4 flex bg-slate-50 p-1 rounded-xl">
+            {([ "ALL", "EQUITIES", "CRYPTO", "FOREX" ] as const).map((cat) => (
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
@@ -176,7 +180,7 @@ export default function LiveScanner({ assets, onNavigateToIntelligence }: LiveSc
 
       {/* Scanned Nodes Grid Layout */}
       {filteredAssets.length === 0 ? (
-        <div className="py-16 text-center border border-dashed border-slate-200 rounded-3xl bg-slate-50/50">
+        <div className="py-16 text-center border border-dashed border-slate-200 rounded-[28px] bg-slate-50/50">
           <Activity className="w-10 h-10 text-slate-400 mx-auto mb-2 animate-pulse" />
           <p className="text-sm font-bold text-on-surface-variant font-sans">No matching feeds found.</p>
           <p className="text-xs text-slate-400 mt-1">Adjust search parameters or filters to load scanned assets.</p>
@@ -200,7 +204,7 @@ export default function LiveScanner({ assets, onNavigateToIntelligence }: LiveSc
             return (
               <div 
                 key={asset.symbol} 
-                className="glass-card rounded-2xl p-5 hover:translate-y-[-4px] hover:shadow-xl duration-350 transition-all flex flex-col justify-between border-slate-100/60"
+                className="glass-card rounded-2xl p-5 hover:translate-y-[-4px] hover:shadow-xl duration-350 transition-all flex flex-col justify-between border border-slate-100/60"
               >
                 <div>
                   
@@ -285,7 +289,7 @@ export default function LiveScanner({ assets, onNavigateToIntelligence }: LiveSc
                 <div className="flex items-center justify-between pt-2">
                   <div className="flex gap-3 text-[10px] font-mono text-on-surface-variant font-semibold">
                     <div>
-                      <span className="text-slate-400">RSI:</span> <span className="text-on-surface">{asset.rsi || "50"}</span>
+                      <span className="text-slate-400">RSI:</span> <span className="text-on-surface">{(asset as any).rsi || "50"}</span>
                     </div>
                     <div>
                       <span className="text-slate-400">Score:</span> <span className="text-primary font-bold">{asset.sentimentScore}</span>

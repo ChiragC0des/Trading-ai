@@ -56,7 +56,7 @@ export default function App() {
   const [assets, setAssets] = useState<MarketAsset[]>([]);
   const [signals, setSignals] = useState<SecuritySignal[]>([]);
   const [executionFeed, setExecutionFeed] = useState<ExecutionLog[]>([]);
-  const [newsFlashes, setNewsFlashes] = useState<NewsFlashItem[]>([]);
+  const [newsFlashes, setNewsFlashes] = useState<NewsFlashItem[]>(INITIAL_NEWS_FLASHES);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
   const [positions, setPositions] = useState<PositionItem[]>([]);
   const [portfolioFinancials, setPortfolioFinancials] = useState<any>({ cash: 100000.0, equity: 100000.0, unrealized_pnl: 0.0 });
@@ -74,7 +74,7 @@ export default function App() {
   // Global Search keyword filter for top level header
   const [globalSearch, setGlobalSearch] = useState("");
 
-  // Live polling sync loop with Python FastAPI (every 5 seconds)
+  // Live polling sync loop with Python FastAPI (every 2.8 seconds)
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -104,7 +104,10 @@ export default function App() {
               activeBots: stock.is_fx ? 2 : 4,
               totalProfit: (stock.change && stock.change >= 0) ? `+$${(stock.change * 50).toFixed(0)}` : `-$${(stock.change ? Math.abs(stock.change) * 50 : 0).toFixed(0)}`,
               dailyYield: stock.change_percent,
-              icon: stock.is_fx ? "currency_exchange" : stock.ticker === "AAPL" ? "layers" : "trending_up"
+              icon: stock.is_fx ? "currency_exchange" : stock.ticker === "AAPL" ? "layers" : "trending_up",
+              market_mass: stock.market_mass,
+              market_velocity: stock.market_velocity,
+              rsi: stock.rsi
             };
           });
           setAssets(mappedAssets);
@@ -149,8 +152,8 @@ export default function App() {
             id: t.id || `tx_${Math.random()}`,
             asset: t.name || t.ticker,
             symbol: t.ticker,
-            type: `${t.type} ${t.qty} Qty`,
-            amount: t.type === "BUY" ? `- $${t.cost.toFixed(2)}` : `+ $${(t.qty * t.price).toFixed(2)}`,
+            type: `${t.type} ${parseFloat(t.qty || 0).toFixed(t.ticker === "BTC" ? 3 : 1)} Qty`,
+            amount: t.type.includes("BUY") ? `-$${parseFloat(t.cost || 0).toFixed(2)}` : `+$${(parseFloat(t.qty || 0) * parseFloat(t.price || 0)).toFixed(2)}`,
             status: t.status || "COMPLETED",
             time: t.buy_date || t.time || "Just now",
             iconName: "coins"
@@ -158,32 +161,19 @@ export default function App() {
           setTransactions(mappedTxs);
         }
 
-        // Generate dynamic live execution feed notifications based on active portfolio and scanned items
-        if (currentAssetsList.length > 0) {
-          const randomAssetObj = currentAssetsList[Math.floor(Math.random() * currentAssetsList.length)];
-          const botNames = ["AlphaBot v2.4", "ScalperCore", "MomentumEngine", "GridMaster v1", ...deployedBots.map(b => b.botName)];
-          const randomBot = botNames[Math.floor(Math.random() * botNames.length)];
-          const operations: ExecutionLog["type"][] = ["Long", "Short", "Re-leveraged", "Take Profit", "Stop Loss"];
-          const randomOp = operations[Math.floor(Math.random() * operations.length)];
-          const statuses: ExecutionLog["status"][] = ["Entered", "Exit", "Modified", "Triggered"];
-          const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
-          const now = new Date();
-          const timeStr = now.toTimeString().split(" ")[0];
-          const priceStr = `$${(randomAssetObj.price * (1 + (Math.random() - 0.5) * 0.005)).toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
+        // Sync Deployed Bots directly from the server engine
+        const botsRes = await fetch("/api/bots");
+        const botsData = await botsRes.json();
+        if (botsData && botsData.bots) {
+          setDeployedBots(botsData.bots);
+          setActiveBotsCount(botsData.bots.length);
+        }
 
-          const newLog: ExecutionLog = {
-            id: Math.random().toString(),
-            asset: randomAssetObj.symbol,
-            type: randomOp,
-            time: timeStr,
-            price: priceStr,
-            agentName: randomBot,
-            status: randomStatus,
-            changeDirection: Math.random() > 0.4 ? "positive" : "negative",
-            changeValue: `+${(Math.random() * 2).toFixed(2)}%`
-          };
-
-          setExecutionFeed((prev) => [newLog, ...prev.slice(0, 9)]);
+        // Sync real-time executions trace from engine instead of random mockups
+        const execsRes = await fetch("/api/executions");
+        const execsData = await execsRes.json();
+        if (execsData && execsData.executions) {
+          setExecutionFeed(execsData.executions);
         }
 
       } catch (err) {
@@ -192,9 +182,89 @@ export default function App() {
     };
 
     fetchData(); // Initial execution
-    const interval = setInterval(fetchData, 5000); // 5-second polling loop
+    const interval = setInterval(fetchData, 2800); // 2.8-second live polling loop
     return () => clearInterval(interval);
-  }, [deployedBots, assets]);
+  }, []);
+
+  // Synchronize news flashes dynamically matching the currently selected active asset context
+  useEffect(() => {
+    let active = true;
+    const fetchNews = async () => {
+      try {
+        let tickerQuery = currentSelectedAsset;
+        if (tickerQuery.includes("/")) {
+          tickerQuery = tickerQuery.split("/")[0]; // BTC/USDT -> BTC
+        }
+        if (tickerQuery.endsWith("=X")) {
+          tickerQuery = tickerQuery.replace("=X", ""); // EURUSD=X -> EURUSD
+          if (tickerQuery.length === 6) {
+            tickerQuery = tickerQuery.slice(0, 3) + "," + tickerQuery.slice(3, 6); // EURUSD -> EUR,USD
+          }
+        }
+
+        const res = await fetch(`/api/news?tickers=${encodeURIComponent(tickerQuery)}&limit=6`);
+        const data = await res.json();
+        if (!active) return;
+
+        if (data && data.success && Array.isArray(data.feed)) {
+          const mappedNews: NewsFlashItem[] = data.feed.map((item: any, idx: number) => {
+            const category = item.source || "News Bulletin";
+            
+            let relativeTime = "Just now";
+            if (item.time_published) {
+              try {
+                const y = item.time_published.substring(0, 4);
+                const m = item.time_published.substring(4, 6);
+                const d = item.time_published.substring(6, 8);
+                const h = item.time_published.substring(9, 11);
+                const min = item.time_published.substring(11, 13);
+                const pubDate = new Date(Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(h), parseInt(min)));
+                const diffMs = Date.now() - pubDate.getTime();
+                const diffMin = Math.round(diffMs / 60000);
+                if (diffMin <= 0) relativeTime = "Just now";
+                else if (diffMin < 60) relativeTime = `${diffMin}m ago`;
+                else {
+                  const diffHrs = Math.floor(diffMin / 60);
+                  if (diffHrs < 24) relativeTime = `${diffHrs}h ago`;
+                  else relativeTime = `${pubDate.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+                }
+              } catch (e) {
+                relativeTime = "Recently";
+              }
+            }
+
+            const score = typeof item.overall_sentiment_score === "number" ? item.overall_sentiment_score : 0;
+            const label = item.overall_sentiment_label || "Neutral";
+            const sentimentText = `${label} (${score >= 0 ? "+" : ""}${score.toFixed(2)})`;
+
+            let color: "primary" | "tertiary" | "secondary" = "primary";
+            if (score > 0.15) color = "secondary";
+            else if (score < -0.15) color = "tertiary";
+
+            return {
+              id: item.url || `news_${idx}_${Date.now()}`,
+              category,
+              title: item.title,
+              time: relativeTime,
+              sentiment: sentimentText,
+              color,
+              url: item.url || "#"
+            };
+          });
+          setNewsFlashes(mappedNews);
+        }
+      } catch (err) {
+        console.error("Error fetching breaking news sentiment:", err);
+      }
+    };
+
+    fetchNews();
+    const interval = setInterval(fetchNews, 60000); // 60-second cycle
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [currentSelectedAsset]);
 
   // Connect wallet toggle simulation
   const handleConnectWallet = () => {
@@ -214,25 +284,47 @@ export default function App() {
     setMobileMenuOpen(false);
   };
 
-  // Deploys high-end compiled strategy bots from StrategyLab
-  const handleDeployNewBot = (newBot: TradingBotStrategy) => {
-    setDeployedBots((prev) => [...prev, newBot]);
-    setActiveBotsCount((prev) => prev + 1);
+  // Deploys high-end compiled strategy bots to server-side memory
+  const handleDeployNewBot = async (newBot: TradingBotStrategy) => {
+    try {
+      const response = await fetch("/api/bots/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bot: newBot })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDeployedBots((prev) => [...prev, data.bot]);
+        setActiveBotsCount((prev) => prev + 1);
+      }
+    } catch (err) {
+      console.error("Error deploying bot to backend matching loop:", err);
+      // Fallback locally
+      setDeployedBots((prev) => [...prev, newBot]);
+      setActiveBotsCount((prev) => prev + 1);
+    }
+  };
 
-    // Instant confirmation execution notification log
-    const now = new Date();
-    const timeStr = now.toTimeString().split(" ")[0];
-    const triggerLog: ExecutionLog = {
-      id: `deploy_${Math.random().toString()}`,
-      asset: newBot.asset,
-      type: "Long",
-      time: timeStr,
-      price: `$${(newBot.asset === "BTC/USDT" ? 64281 : newBot.asset === "ETH/USDT" ? 3450 : 142).toLocaleString()}`,
-      agentName: newBot.botName,
-      status: "Entered"
-    };
-
-    setExecutionFeed((prev) => [triggerLog, ...prev.slice(0, 9)]);
+  const handleClosePosition = async (ticker: string) => {
+    try {
+      const res = await fetch("/api/position/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker })
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Fast refresh portfolio layout
+        const portfolioRes = await fetch("/api/portfolio");
+        const portfolioData = await portfolioRes.json();
+        if (portfolioData) {
+          if (portfolioData.positions) setPositions(portfolioData.positions);
+          if (portfolioData.financials) setPortfolioFinancials(portfolioData.financials);
+        }
+      }
+    } catch (err) {
+      console.error("Error executing dynamic close override:", err);
+    }
   };
 
   // Safe search redirection logic
@@ -368,7 +460,7 @@ export default function App() {
               <span>Docs</span>
             </a>
             <a 
-              href="#"
+              href="#" 
               onClick={(e) => { e.preventDefault(); setActiveTab("command"); }}
               className="flex items-center gap-3 text-xs font-semibold text-on-surface-variant px-2.5 py-2 hover:text-primary transition-colors"
             >
@@ -451,7 +543,7 @@ export default function App() {
               <img 
                 alt="Architect Headshot"
                 referrerPolicy="no-referrer"
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuD4RsG9_HsNm9Bh0_XroibuYNQ4iidMzuEtRnqQM76AbpsCrt2R2TRPOhpn3Y0BlcVRT-Ri1b1Ku2iOGzokZJgje-9WqHzMcHmO6JkxsMpYb5iAy8gm71kfliiUheDGNm1y6jN0oZ6ogi1oqchFvG3f_8T-ZMe6pzwacMiP0FvkbQVZiqNH1swsQiijn2PaW9E4PawtC0WTDDPovyCmgWOeWFK_JJ331bezIcQFjYREgbQ3NpO451dqFD61nwtL3eSvkyXQaMHZoS8"
+                src="https://lh3.googleusercontent.com/aida-public/AB6AXuD4RsG9_HsNm9BH0_XroibuYNQ4iidxMzuEtRnqQM76AbpsCrt2R2TRPOhpn3Y0BlcVRT-Ri1b1Ku2iOGzokZGjge-9WqHzMcHmO6KkxsMpYb5iAy8gm71kfliiuUheDGNm1y6jN0oZ6ogi1oqchFvG3f_8T-ZMe6pzwacMiP0FvkbQVZiqNH1swsQiijn2PaW9E4PAwtC0WTDDPovyCmgWOeWFK_JJ331bezIcQFjYREgbQ3NpO451dqFD61nwtL3eSvkyXQaMHZoS8"
                 className="w-full h-full object-cover"
               />
             </div>
@@ -471,6 +563,7 @@ export default function App() {
               deployedBots={deployedBots}
               positions={positions}
               portfolioFinancials={portfolioFinancials}
+              onClosePosition={handleClosePosition}
               onNavigateToIntelligence={handleViewAssetDetails}
               onNavigateToStrategy={() => setActiveTab("strategy")}
             />

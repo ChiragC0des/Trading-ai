@@ -16,6 +16,9 @@ export interface MarketAsset {
   totalProfit: string;
   dailyYield: number;
   icon: string;
+  market_mass?: number;
+  market_velocity?: number;
+  rsi?: number;
 }
 
 export interface SecuritySignal {
@@ -80,11 +83,12 @@ export interface TradingBotStrategy {
 
 export interface NewsFlashItem {
   id: string;
-  category: "News Flash" | "Technical Warning" | "On-Chain Alert";
+  category: string;
   title: string;
   time: string;
   sentiment: string;
   color: "primary" | "tertiary" | "secondary";
+  url?: string;
 }
 
 export interface TransactionItem {
@@ -113,4 +117,5 @@ export interface PositionItem {
   value: number;
   pnl: number;
   pnl_percent: number;
+  bot_id?: string;
 }

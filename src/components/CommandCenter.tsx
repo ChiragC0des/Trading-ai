@@ -14,16 +14,16 @@ import {
   ArrowUpRight, 
   ArrowDownRight,
   RefreshCw,
-  Clock
+  Clock,
+  Activity
 } from "lucide-react";
 import { 
   MarketAsset, 
   SecuritySignal, 
   ExecutionLog, 
   TradingBotStrategy,
-  PositionItem
+  PositionItem 
 } from "../types";
-import { Trash2, AlertOctagon } from "lucide-react";
 
 interface CommandCenterProps {
   assets: MarketAsset[];
@@ -33,6 +33,7 @@ interface CommandCenterProps {
   deployedBots: TradingBotStrategy[];
   positions: PositionItem[];
   portfolioFinancials: any;
+  onClosePosition: (ticker: string) => void;
   onNavigateToIntelligence: (assetSymbol: string) => void;
   onNavigateToStrategy: () => void;
 }
@@ -45,46 +46,10 @@ export default function CommandCenter({
   deployedBots,
   positions,
   portfolioFinancials,
+  onClosePosition,
   onNavigateToIntelligence,
   onNavigateToStrategy,
 }: CommandCenterProps) {
-  const [isLiquidating, setIsLiquidating] = useState<string | null>(null);
-
-  const formatPrice = (price: number | undefined | null, isFx: boolean) => {
-    if (price === undefined || price === null) return "0.00";
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: isFx ? 5 : 2,
-      maximumFractionDigits: isFx ? 5 : 2,
-    });
-  };
-
-  const handleLiquidate = async (ticker: string, currentPrice: number, qty: number, name: string) => {
-    setIsLiquidating(ticker);
-    try {
-      const response = await fetch("/api/trade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker,
-          name,
-          qty,
-          price: currentPrice,
-          side: "SELL"
-        })
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        // Show a nice temporary in-app message
-        console.log(`Successfully liquidated ${ticker}`);
-      } else {
-        alert(data.detail || data.message || `Failed to liquidate position for ${ticker}.`);
-      }
-    } catch (err) {
-      console.error("Error liquidating position:", err);
-    } finally {
-      setIsLiquidating(null);
-    }
-  };
   // AI insight module interactive states
   const [userQuery, setUserQuery] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -162,12 +127,13 @@ export default function CommandCenter({
             
             <div className="text-right">
               <span className="text-2xl md:text-3xl font-black font-sans text-primary select-all">
-                ${portfolioFinancials?.equity?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "100,000.00"}
+                ${(portfolioFinancials?.equity ?? 100000.0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
               </span>
-              <div className={`flex items-center justify-end gap-1 mt-1 ${portfolioFinancials?.unrealized_pnl >= 0 ? "text-secondary" : "text-rose-500"}`}>
-                {portfolioFinancials?.unrealized_pnl >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+              <div className="flex items-center justify-end gap-1 mt-1 text-secondary">
+                <TrendingUp className="w-4 h-4" />
                 <span className="text-xs font-semibold tracking-wide">
-                  {portfolioFinancials?.unrealized_pnl >= 0 ? "+" : ""}${portfolioFinancials?.unrealized_pnl?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"} P&L
+                  {(portfolioFinancials?.unrealized_pnl ?? 0) >= 0 ? "+" : ""}
+                  ${(portfolioFinancials?.unrealized_pnl ?? 0.0).toLocaleString("en-US", { minimumFractionDigits: 2 })} Profit
                 </span>
               </div>
             </div>
@@ -220,26 +186,26 @@ export default function CommandCenter({
           <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-slate-100">
             <div>
               <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
-                Active Bots
+                Active Bots Fleet
               </p>
-              <p className="text-xl md:text-2xl font-bold text-on-surface">
-                {activeBotsCount}
-              </p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
-                Available Cash
-              </p>
-              <p className="text-xl md:text-2xl font-bold text-on-surface font-mono">
-                ${portfolioFinancials?.cash?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "100,000.00"}
+              <p className="text-xl font-bold text-on-surface">
+                {activeBotsCount} Units
               </p>
             </div>
             <div>
               <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
-                Unrealized P&L
+                Liquid Cash Balance
               </p>
-              <p className={`text-xl md:text-2xl font-bold font-mono ${portfolioFinancials?.unrealized_pnl >= 0 ? "text-secondary" : "text-rose-500"}`}>
-                {portfolioFinancials?.unrealized_pnl >= 0 ? "+" : ""}${portfolioFinancials?.unrealized_pnl?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}
+              <p className="text-xl font-bold text-on-surface font-mono">
+                ${(portfolioFinancials?.cash ?? 100000.0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
+                Open Positions Value
+              </p>
+              <p className="text-xl font-bold text-secondary font-mono">
+                ${(positions.reduce((sum, pos) => sum + pos.value, 0)).toLocaleString("en-US", { minimumFractionDigits: 2 })}
               </p>
             </div>
           </div>
@@ -322,6 +288,131 @@ export default function CommandCenter({
           </div>
         </div>
 
+      </div>
+
+      {/* 2. Automated AI Bot Trade Positions & Trailing Stop-Loss Engine */}
+      <div className="glass-card rounded-2xl p-6 relative overflow-hidden bg-white shadow-sm border border-slate-100">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+          <div>
+            <h3 className="text-base font-bold font-sans tracking-tight text-on-surface flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-primary animate-pulse" />
+              Automated Trade Positions & Trailing Stop-Loss Engine
+            </h3>
+            <p className="text-xs text-on-surface-variant font-sans mt-0.5">
+              Live algorithmic trades executed with automated predicted targets, risk limits, and trailing lock-ins.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <span className="px-3 py-1 bg-primary/10 border border-primary/20 text-primary text-[10px] font-bold uppercase rounded-lg">
+              TSL Tracking Guard: ACTIVE
+            </span>
+          </div>
+        </div>
+
+        {positions.length === 0 ? (
+          <div className="py-12 text-center rounded-xl bg-slate-50/55 border border-dashed border-slate-200">
+            <Activity className="w-8 h-8 text-primary/40 mx-auto mb-2 animate-bounce" />
+            <p className="text-xs text-slate-500 font-semibold font-sans">No active bot positions at this second.</p>
+            <p className="text-[10px] text-slate-400 mt-1 font-sans">
+              Deployed bots are monitoring live order indices to trigger an automated buy setup.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest border-b border-slate-150 pb-3">
+                  <th className="pb-3 pl-2">Asset / Manager Bot</th>
+                  <th className="pb-3">Trade Size</th>
+                  <th className="pb-3">Buy Price</th>
+                  <th className="pb-3">Live Price</th>
+                  <th className="pb-3">Profit Target Goal</th>
+                  <th className="pb-3">Risk Guard (SL / TSL)</th>
+                  <th className="pb-3">Unrealized PNL</th>
+                  <th className="pb-3 text-right pr-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="text-xs divide-y divide-slate-100">
+                {positions.map((pos) => {
+                  const botName = deployedBots.find(b => b.id === pos.bot_id || b.botName === pos.bot_id)?.botName || "Strategic Core Bot";
+                  const isProfit = pos.pnl >= 0;
+                  const isFx = pos.ticker.includes("=X");
+                  const precision = isFx ? 5 : 2;
+                  
+                  return (
+                    <tr key={pos.ticker} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="py-4 pl-2">
+                        <div className="font-bold text-on-surface text-xs flex items-center gap-1.5">
+                          <span className="w-2 h-2 bg-primary rounded-full animate-ping" />
+                          {pos.ticker}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          {botName}
+                        </div>
+                      </td>
+                      <td className="py-4 font-mono font-semibold text-slate-700">
+                        {parseFloat(pos.qty.toFixed(isFx ? 1 : 4))}
+                        <span className="text-[10px] text-slate-400 ml-1.5 font-sans font-normal block">
+                          Cost: ${parseFloat(pos.cost ? pos.cost.toFixed(2) : "0").toLocaleString()}
+                        </span>
+                      </td>
+                      <td className="py-4 font-mono text-slate-600">
+                        ${pos.buy_price.toLocaleString("en-US", { minimumFractionDigits: precision })}
+                      </td>
+                      <td className="py-4 font-mono font-bold text-primary">
+                        ${pos.current_price.toLocaleString("en-US", { minimumFractionDigits: precision })}
+                      </td>
+                      <td className="py-4 font-mono">
+                        <div className="text-slate-900 font-bold">
+                          ${pos.target_price.toLocaleString("en-US", { minimumFractionDigits: precision })}
+                        </div>
+                        <div className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider mt-0.5">
+                          Predicted Target Goal
+                        </div>
+                      </td>
+                      <td className="py-4 font-mono">
+                        <div className="flex flex-col gap-1">
+                          <div className="text-[10px] text-slate-500">
+                            Initial Stop: <strong className="text-slate-700 font-bold">${pos.initial_stop.toLocaleString("en-US", { minimumFractionDigits: precision })}</strong>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-900">
+                            Trailing Stop: 
+                            <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1 font-bold">
+                              ${pos.trailing_stop.toLocaleString("en-US", { minimumFractionDigits: precision })}
+                              <span className="text-[8px] uppercase tracking-wider text-emerald-600 font-black tracking-tighter">(Raised)</span>
+                            </span>
+                          </div>
+                          {pos.highest_price > pos.buy_price && (
+                            <div className="text-[9px] text-emerald-600 font-black flex items-center gap-0.5 mt-0.5">
+                              <span>↑ New High: ${pos.highest_price.toLocaleString("en-US", { minimumFractionDigits: precision })}</span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-4 font-mono">
+                        <span className={`inline-flex items-center gap-0.5 font-bold px-2 py-1 rounded-lg text-xs ${
+                          isProfit ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
+                        }`}>
+                          {isProfit ? "+" : ""}
+                          ${(pos.pnl || 0.0).toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                          <span className="text-[10px] ml-1 opacity-85">({isProfit ? "+" : ""}{(pos.pnl_percent || 0.0).toFixed(2)}%)</span>
+                        </span>
+                      </td>
+                      <td className="py-4 text-right pr-2">
+                        <button
+                          onClick={() => onClosePosition(pos.ticker)}
+                          className="px-2.5 py-1 bg-slate-50 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-600 hover:text-rose-700 text-[10px] font-bold uppercase rounded-lg transition-all"
+                        >
+                          Manual Close
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Bottom Section: Signals & Intelligence */}
@@ -483,111 +574,9 @@ export default function CommandCenter({
             )}
           </form>
 
-      </div>
-    </div>
-
-      {/* Active Portfolio Holdings Table */}
-      <div className="glass-card rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-              <TrendingUp className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-on-surface">Active Portfolio Holdings</h3>
-              <p className="text-xs text-on-surface-variant">Real-time open positions & automatic exit parameters</p>
-            </div>
-          </div>
-          <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-bold rounded-full">
-            {positions.length} Active Nodes
-          </span>
         </div>
 
-        {positions.length === 0 ? (
-          <div className="py-12 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-            <AlertOctagon className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-on-surface-variant">No active positions found.</p>
-            <p className="text-xs text-slate-400 mt-1">Initiate a buy order in Market Intelligence to begin automated tracking.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto custom-scrollbar">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest border-b border-slate-100">
-                  <th className="pb-3 pl-2">Asset</th>
-                  <th className="pb-3">Quantity</th>
-                  <th className="pb-3">Buy / Current Price</th>
-                  <th className="pb-3">Stops (Initial / Trailing)</th>
-                  <th className="pb-3">Target Sell</th>
-                  <th className="pb-3">Total Value</th>
-                  <th className="pb-3">P&L</th>
-                  <th className="pb-3 text-right pr-2">Action</th>
-                </tr>
-              </thead>
-              <tbody className="text-xs">
-                {positions.map((pos) => {
-                  const isFx = pos.ticker.endsWith("=X");
-                  const isProfit = pos.pnl >= 0;
-                  return (
-                    <tr key={pos.ticker} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors group">
-                      <td className="py-4 pl-2 font-semibold text-on-surface flex items-center gap-2">
-                        <div className="w-7 h-7 bg-primary/10 rounded-full flex items-center justify-center font-mono font-bold text-[10px] text-primary">
-                          {pos.ticker.split("=")[0].slice(0, 3)}
-                        </div>
-                        <div>
-                          <span className="font-semibold block">{pos.ticker}</span>
-                          <span className="text-[10px] text-on-surface-variant block truncate max-w-[120px]">{pos.name}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 font-mono font-semibold text-on-surface">
-                        {pos.qty.toLocaleString()}
-                      </td>
-                      <td className="py-4 font-mono">
-                        <span className="text-slate-400 font-medium">${formatPrice(pos.buy_price, isFx)}</span>
-                        <span className="mx-1.5 text-slate-300">/</span>
-                        <span className="text-on-surface font-bold text-scale-pulse">${formatPrice(pos.current_price, isFx)}</span>
-                      </td>
-                      <td className="py-4 font-mono text-[11px]">
-                        <span className="text-rose-500 font-semibold">${formatPrice(pos.initial_stop, isFx)}</span>
-                        <span className="mx-1.5 text-slate-300">|</span>
-                        <span className="text-amber-500 font-semibold">${formatPrice(pos.trailing_stop, isFx)}</span>
-                      </td>
-                      <td className="py-4 font-mono font-semibold text-emerald-600">
-                        ${formatPrice(pos.target_price, isFx)}
-                      </td>
-                      <td className="py-4 font-mono font-bold text-on-surface">
-                        ${pos.value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-4 font-mono font-bold">
-                        <span className={`flex items-center gap-0.5 ${isProfit ? "text-secondary" : "text-rose-600"}`}>
-                          {isProfit ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
-                          <span>{isProfit ? "+" : ""}${pos.pnl.toLocaleString("en-US", { minimumFractionDigits: 2 })} ({isProfit ? "+" : ""}{pos.pnl_percent.toFixed(2)}%)</span>
-                        </span>
-                      </td>
-                      <td className="py-4 text-right pr-2">
-                        <button
-                          onClick={() => handleLiquidate(pos.ticker, pos.current_price, pos.qty, pos.name)}
-                          disabled={isLiquidating === pos.ticker}
-                          className="p-1.5 bg-rose-50 border border-rose-100 hover:bg-rose-100/70 text-rose-600 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1 font-semibold ml-auto"
-                          title="Liquidate Node Position"
-                        >
-                          {isLiquidating === pos.ticker ? (
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-3.5 h-3.5" />
-                          )}
-                          <span className="text-[10px] uppercase font-bold tracking-wider px-0.5">Liquidate</span>
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
-
     </div>
   );
 }

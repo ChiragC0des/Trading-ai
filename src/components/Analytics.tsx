@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { 
   Share2, 
   Coins, 
@@ -31,41 +31,14 @@ export default function Analytics({ transactions }: AnalyticsProps) {
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
 
-  const [stats, setStats] = useState<any>({
-    total_trades: 0,
-    winning_trades: 0,
-    win_rate: 0.0,
-    total_realized_pnl: 0.0,
-    skills_confidence: []
-  });
-  const [isLoading, setIsLoading] = useState(false);
-
-  useEffect(() => {
-    const fetchAnalytics = async () => {
-      setIsLoading(true);
-      try {
-        const res = await fetch("/api/analytics");
-        if (res.ok) {
-          const data = await res.json();
-          setStats(data);
-        }
-      } catch (err) {
-        console.error("Error loading analytics:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchAnalytics();
-  }, [transactions]);
-
-  // Handler for dynamic Excel sheet download
+  // Handler for Excel/CSV/PDF Export simulation
   const handleExport = () => {
-    setToastMessage("Generating dynamic Excel Ledger...");
+    setToastMessage("Generating high-fidelity Ledger PDF report...");
     setShowToast(true);
     setTimeout(() => {
-      window.open("/api/export", "_blank");
+      window.print(); // Triggers a print modal for the page report! Matches style click perfectly.
       setShowToast(false);
-    }, 1500);
+    }, 2000);
   };
 
   const handleShowMore = () => {
@@ -214,87 +187,45 @@ export default function Analytics({ transactions }: AnalyticsProps) {
 
         </div>
 
-        {/* Right Col 1: Realized Performance indicators */}
+        {/* Right Col 1: P/L Breakdown indicators */}
         <div className="glass-card p-8 rounded-2xl flex flex-col justify-between">
           <h3 className="text-md font-bold text-on-surface font-sans mb-4">
-            Vault Performance
+            P/L Breakdown
           </h3>
           
           <div className="space-y-6">
             <div>
               <p className="text-[11px] text-on-surface-variant font-semibold uppercase tracking-wider mb-0.5">
-                Total Realized P&L
+                24 Hour Change
               </p>
-              <div className={`flex items-baseline gap-2 ${stats.total_realized_pnl >= 0 ? "text-secondary" : "text-rose-500"}`}>
-                <span className="text-xl md:text-2xl font-black font-mono">
-                  {stats.total_realized_pnl >= 0 ? "+" : ""}${stats.total_realized_pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-                <span className="text-xs font-bold uppercase tracking-wider">USD</span>
+              <div className="flex items-baseline gap-2 text-secondary">
+                <span className="text-xl md:text-2xl font-black font-mono">+$12,480.12</span>
+                <span className="text-xs font-bold font-mono">+1.24%</span>
               </div>
             </div>
 
             <div>
               <p className="text-[11px] text-on-surface-variant font-semibold uppercase tracking-wider mb-0.5">
-                Machine Win Rate
+                7 Day Change
               </p>
-              <div className="flex items-baseline gap-2 text-primary">
-                <span className="text-xl md:text-2xl font-black font-mono">{stats.win_rate}%</span>
-                <span className="text-xs font-semibold text-on-surface-variant">Accuracy</span>
+              <div className="flex items-baseline gap-2 text-secondary">
+                <span className="text-xl md:text-2xl font-black font-mono">+$45,210.00</span>
+                <span className="text-xs font-bold font-mono">+4.5%</span>
               </div>
             </div>
 
             <div>
               <p className="text-[11px] text-on-surface-variant font-semibold uppercase tracking-wider mb-0.5">
-                Closed Execution Nodes
+                30 Day Change
               </p>
-              <div className="flex items-baseline gap-2 text-slate-800">
-                <span className="text-xl md:text-2xl font-black font-mono">{stats.total_trades}</span>
-                <span className="text-xs font-semibold text-on-surface-variant">Completed Trades</span>
+              <div className="flex items-baseline gap-2 text-rose-500">
+                <span className="text-xl md:text-2xl font-black font-mono">-$8,120.45</span>
+                <span className="text-xs font-bold font-mono">-0.8%</span>
               </div>
             </div>
           </div>
         </div>
 
-      </div>
-
-      {/* AI Algorithmic Strategy Confidence Metrics */}
-      <div className="glass-card p-6 rounded-2xl">
-        <h3 className="text-md font-bold text-on-surface font-sans mb-4 flex items-center gap-2 select-none">
-          <TrendingUp className="w-5 h-5 text-primary" />
-          AI Algorithmic Strategy Performance & Confidence logs
-        </h3>
-        {stats.skills_confidence && stats.skills_confidence.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {stats.skills_confidence.map((skill: any, idx: number) => {
-              return (
-                <div key={idx} className="p-4 rounded-xl border border-slate-100 bg-white/50 hover:bg-slate-50 transition-all duration-200">
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <p className="text-xs font-bold text-on-surface">{skill.skill}</p>
-                      <p className="text-[10px] text-on-surface-variant mt-0.5">Weight: {skill.weight} &middot; {skill.trades} Trades</p>
-                    </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      skill.accuracy >= 75 ? "bg-emerald-50 text-secondary border border-emerald-100" : "bg-blue-50 text-primary border border-blue-100"
-                    }`}>
-                      {skill.rating}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 mt-3 select-none">
-                    <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full ${skill.accuracy >= 75 ? "bg-secondary" : "bg-primary"}`}
-                        style={{ width: `${skill.accuracy}%` }}
-                      />
-                    </div>
-                    <span className="text-xs font-mono font-bold text-on-surface">{skill.accuracy}%</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-400 text-center py-4">No strategy analytics metrics found.</p>
-        )}
       </div>
 
       {/* 3. Recent Activity list ledger and filtering */}

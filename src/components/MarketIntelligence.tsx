@@ -35,26 +35,77 @@ interface MarketIntelligenceProps {
   onSelectAsset: (symbol: string) => void;
 }
 
+interface CandleData {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  time: string;
+}
+
+const generateInitialCandles = (basePrice: number, timeframe: string): CandleData[] => {
+  const result: CandleData[] = [];
+  let currentPrice = basePrice * 0.96; // start slightly lower for a beautiful trend up
+  const count = 16;
+  const now = Date.now();
+  
+  // Set timeframe interval in ms
+  let intervalMs = 60000; // 1m
+  if (timeframe === "15m") intervalMs = 15 * 60000;
+  else if (timeframe === "1h") intervalMs = 60 * 60000;
+  else if (timeframe === "4h") intervalMs = 4 * 60 * 60000;
+  else if (timeframe === "1d") intervalMs = 24 * 60 * 60000;
+
+  for (let i = 0; i < count; i++) {
+    const timeVal = new Date(now - (count - i) * intervalMs);
+    let timeStr = "";
+    if (timeframe === "1d") {
+      timeStr = timeVal.toLocaleDateString([], { month: "short", day: "numeric" });
+    } else if (timeframe === "4h") {
+      timeStr = timeVal.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + timeVal.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    } else {
+      timeStr = timeVal.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    // Create realistic random walk steps
+    const changePercent = (Math.random() - 0.44) * (basePrice < 5 ? 0.003 : 0.016); // narrower ranges for fx ratios
+    const openValue = currentPrice;
+    const closeValue = currentPrice * (1 + changePercent);
+    const highValue = Math.max(openValue, closeValue) * (1 + Math.random() * (basePrice < 5 ? 0.001 : 0.006));
+    const lowValue = Math.min(openValue, closeValue) * (1 - Math.random() * (basePrice < 5 ? 0.001 : 0.006));
+    
+    result.push({
+      open: parseFloat(openValue.toFixed(basePrice < 10 ? 5 : 2)),
+      high: parseFloat(highValue.toFixed(basePrice < 10 ? 5 : 2)),
+      low: parseFloat(lowValue.toFixed(basePrice < 10 ? 5 : 2)),
+      close: parseFloat(closeValue.toFixed(basePrice < 10 ? 5 : 2)),
+      time: timeStr
+    });
+    
+    currentPrice = closeValue;
+  }
+  
+  // Align closing price of the very last candle to current basePrice exactly
+  const last = result[result.length - 1];
+  last.close = basePrice;
+  last.high = parseFloat((Math.max(last.open, basePrice) * (basePrice < 5 ? 1.0005 : 1.003)).toFixed(basePrice < 10 ? 5 : 2));
+  last.low = parseFloat((Math.min(last.open, basePrice) * (basePrice < 5 ? 0.9995 : 0.997)).toFixed(basePrice < 10 ? 5 : 2));
+  
+  return result;
+};
+
+const splinePath = (points: { x: number; y: number }[]) => {
+  if (points.length === 0) return "";
+  return points.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+};
+
 export default function MarketIntelligence({
   assets,
   newsFlashes,
   selectedAssetSymbol,
   onSelectAsset
 }: MarketIntelligenceProps) {
-  const currentAsset = assets.find((a) => a.symbol === selectedAssetSymbol) || assets[0] || {
-    symbol: selectedAssetSymbol || "AAPL",
-    name: "Loading Stock Data...",
-    category: "Spot",
-    price: 0.0,
-    change24h: 0.0,
-    aiSentiment: "Neutral",
-    sentimentScore: 50,
-    volume24h: "0",
-    activeBots: 0,
-    totalProfit: "$0",
-    dailyYield: 0.0,
-    icon: "trending_up"
-  };
+  const currentAsset = assets.find((a) => a.symbol === selectedAssetSymbol) || assets[0];
   
   // Interactive Timeframe
   const [timeframe, setTimeframe] = useState<"1m" | "15m" | "1h" | "4h" | "1d">("4h");
@@ -67,79 +118,122 @@ export default function MarketIntelligence({
   const [livePrice, setLivePrice] = useState(currentAsset.price);
   const [priceFlashColor, setPriceFlashColor] = useState<"green" | "red" | "neutral">("neutral");
 
-  // Historical data states
-  const [stockDetails, setStockDetails] = useState<any>(null);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const [hoveredCandle, setHoveredCandle] = useState<any>(null);
-  
-  // Order desk states
-  const [tradeQty, setTradeQty] = useState(10);
-  const [isOrdering, setIsOrdering] = useState(false);
+  // Live Candlestick series
+  const [candles, setCandles] = useState<CandleData[]>([]);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const tickCountRef = useRef(0);
 
-  // Keep livePrice in sync when the user changes selected asset manually or when asset prices update
+  // Re-generate candles on timeframe or asset updates
   useEffect(() => {
-    if (currentAsset) {
-      setLivePrice(currentAsset.price);
-    }
-  }, [selectedAssetSymbol, currentAsset]);
+    const initialCandles = generateInitialCandles(currentAsset.price, timeframe);
+    setCandles(initialCandles);
+    tickCountRef.current = 0;
+  }, [selectedAssetSymbol, timeframe]);
 
+  // Keep live candle in absolute sync when livePrice ticks
   useEffect(() => {
-    const fetchStockDetails = async () => {
-      setIsLoadingHistory(true);
-      try {
-        const res = await fetch(`/api/stock/${selectedAssetSymbol}`);
-        if (res.ok) {
-          const data = await res.json();
-          setStockDetails(data);
+    if (candles.length === 0) return;
+
+    setCandles((prev) => {
+      if (prev.length === 0) return prev;
+      const nextCandles = [...prev];
+      const lastIdx = nextCandles.length - 1;
+      const lastCandle = { ...nextCandles[lastIdx] };
+
+      lastCandle.close = parseFloat(livePrice.toFixed(currentAsset.price < 10 ? 5 : 2));
+      if (livePrice > lastCandle.high) {
+        lastCandle.high = parseFloat(livePrice.toFixed(currentAsset.price < 10 ? 5 : 2));
+      }
+      if (livePrice < lastCandle.low) {
+        lastCandle.low = parseFloat(livePrice.toFixed(currentAsset.price < 10 ? 5 : 2));
+      }
+
+      nextCandles[lastIdx] = lastCandle;
+      return nextCandles;
+    });
+
+    // Cycle update to roll to next candle block after 6 ticks (ticks happen every 2.8 seconds, so ~17 seconds per candle)
+    tickCountRef.current += 1;
+    if (tickCountRef.current >= 6) {
+      tickCountRef.current = 0;
+      setCandles((prev) => {
+        if (prev.length === 0) return prev;
+        const now = new Date();
+        let timeStr = "";
+        if (timeframe === "1d") {
+          timeStr = now.toLocaleDateString([], { month: "short", day: "numeric" });
+        } else if (timeframe === "4h") {
+          timeStr = now.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        } else {
+          timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
-      } catch (err) {
-        console.error("Error fetching stock history details:", err);
-      } finally {
-        setIsLoadingHistory(false);
-      }
-    };
-    fetchStockDetails();
-  }, [selectedAssetSymbol]);
+        
+        const nextOpen = prev[prev.length - 1].close;
+        const newCandle: CandleData = {
+          open: nextOpen,
+          high: nextOpen,
+          low: nextOpen,
+          close: nextOpen,
+          time: timeStr
+        };
 
-  const handleInitiateBuy = async () => {
-    if (!stockDetails) return;
-    setIsOrdering(true);
-    try {
-      const response = await fetch("/api/trade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker: selectedAssetSymbol,
-          name: stockDetails.name,
-          qty: tradeQty,
-          price: livePrice,
-          side: "BUY",
-          initial_stop: stockDetails.initial_stop,
-          trailing_stop: stockDetails.atr_trailing_stop,
-          target_price: stockDetails.target_price
-        })
+        const next = [...prev.slice(1), newCandle];
+        return next;
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        alert(`Automated buy order successfully executed for ${selectedAssetSymbol}!`);
-      } else {
-        alert(data.detail || data.message || "Failed to execute order.");
-      }
-    } catch (err) {
-      console.error("Error executing buy order:", err);
-      alert("Error executing buy order. Check connection to FastAPI backend.");
-    } finally {
-      setIsOrdering(false);
     }
-  };
+  }, [livePrice]);
+
+  // Keep livePrice in sync when the user changes selected asset manually or market price updates
+  const livePriceRef = useRef(livePrice);
+  useEffect(() => {
+    livePriceRef.current = livePrice;
+  }, [livePrice]);
+
+  useEffect(() => {
+    setLivePrice(currentAsset.price);
+
+    // Initialize bids, asks, and recent trades scaled dynamically around currentAsset's actual price
+    const base = currentAsset.price;
+    const isFx = currentAsset.symbol.includes("=X") || currentAsset.price < 5;
+    const offset1 = isFx ? 0.0001 : 0.0005 * base;
+    const offset2 = isFx ? 0.0002 : 0.001 * base;
+    const offset3 = isFx ? 0.0003 : 0.0015 * base;
+
+    setAsks([
+      { price: parseFloat((base + offset3).toFixed(isFx ? 5 : 2)), amount: isFx ? 50000 : 0.8, total: `${((base + offset3) * (isFx ? 50000 : 0.8) / 1000).toFixed(1)}k`, barPercent: 32 },
+      { price: parseFloat((base + offset2).toFixed(isFx ? 5 : 2)), amount: isFx ? 120000 : 1.8, total: `${((base + offset2) * (isFx ? 120000 : 1.8) / 1000).toFixed(1)}k`, barPercent: 65 },
+      { price: parseFloat((base + offset1).toFixed(isFx ? 5 : 2)), amount: isFx ? 40000 : 0.4, total: `${((base + offset1) * (isFx ? 40000 : 0.4) / 1000).toFixed(1)}k`, barPercent: 15 }
+    ]);
+
+    setBids([
+      { price: parseFloat((base - offset1).toFixed(isFx ? 5 : 2)), amount: isFx ? 85000 : 1.2, total: `${((base - offset1) * (isFx ? 85000 : 1.2) / 1000).toFixed(1)}k`, barPercent: 45 },
+      { price: parseFloat((base - offset2).toFixed(isFx ? 5 : 2)), amount: isFx ? 160000 : 2.4, total: `${((base - offset2) * (isFx ? 160000 : 2.4) / 1000).toFixed(1)}k`, barPercent: 82 },
+      { price: parseFloat((base - offset3).toFixed(isFx ? 5 : 2)), amount: isFx ? 35000 : 0.5, total: `${((base - offset3) * (isFx ? 35000 : 0.5) / 1000).toFixed(1)}k`, barPercent: 25 }
+    ]);
+
+    const staticTradeTimes = ["12:04:15", "12:04:14", "12:04:12", "12:04:09", "12:04:05", "12:04:02"];
+    setRecentTrades(staticTradeTimes.map((time, idx) => {
+      const wiggle = (Math.random() - 0.5) * (isFx ? 0.0002 : 0.001 * base);
+      return {
+        id: `it-${idx}-${Date.now()}`,
+        price: parseFloat((base + wiggle).toFixed(isFx ? 5 : 2)),
+        amount: isFx ? Math.floor(20000 + Math.random() * 80000) : parseFloat((0.01 + Math.random() * 1.5).toFixed(4)),
+        time,
+        type: Math.random() > 0.4 ? "buy" : "sell"
+      };
+    }));
+  }, [selectedAssetSymbol, currentAsset.price]);
 
   // Handle Dynamic price tick interval
   useEffect(() => {
     const handleTick = setInterval(() => {
+      const activePriceVal = livePriceRef.current;
+      const isFx = selectedAssetSymbol.includes("=X") || activePriceVal < 5;
+      
       // Small random swing e.g. -0.15% to +0.20%
-      const percentageChange = (Math.random() - 0.42) * 0.0012; // slightly biased upwards
-      const delta = livePrice * percentageChange;
-      const newPrice = livePrice + delta;
+      const percentageChange = (Math.random() - 0.44) * (isFx ? 0.00015 : 0.00075);
+      const delta = activePriceVal * percentageChange;
+      const newPrice = activePriceVal + delta;
 
       setLivePrice(newPrice);
       setPriceFlashColor(delta > 0 ? "green" : "red");
@@ -155,7 +249,7 @@ export default function MarketIntelligence({
       const timeStr = now.toTimeString().split(" ")[0];
       const newMTrade: TradeItem = {
         id: Math.random().toString(),
-        price: +newPrice.toFixed(2),
+        price: +newPrice.toFixed(isFx ? 5 : 2),
         amount: randomAmount,
         time: timeStr,
         type: delta > 0 ? "buy" : "sell"
@@ -167,10 +261,10 @@ export default function MarketIntelligence({
       setAsks((prev) => 
         prev.map((ask, i) => {
           const spreadFactor = 1 + (Math.random() - 0.5) * 0.0003;
-          const priceOffset = newPrice + (i + 1) * (newPrice * 0.00015) * spreadFactor;
+          const priceOffset = newPrice + (i + 1) * (newPrice * (isFx ? 0.00005 : 0.00015)) * spreadFactor;
           const freshAmount = +(ask.amount * (1 + (Math.random() - 0.5) * 0.1)).toFixed(4);
           return {
-            price: +priceOffset.toFixed(2),
+            price: +priceOffset.toFixed(isFx ? 5 : 2),
             amount: freshAmount,
             total: `${(priceOffset * freshAmount / 1000).toFixed(1)}k`,
             barPercent: Math.min(100, Math.floor(freshAmount * (selectedAssetSymbol.startsWith("BTC") ? 50 : 2)))
@@ -181,10 +275,10 @@ export default function MarketIntelligence({
       setBids((prev) => 
         prev.map((bid, i) => {
           const spreadFactor = 1 + (Math.random() - 0.5) * 0.0003;
-          const priceOffset = newPrice - (i + 1) * (newPrice * 0.0001) * spreadFactor;
+          const priceOffset = newPrice - (i + 1) * (newPrice * (isFx ? 0.00004 : 0.0001)) * spreadFactor;
           const freshAmount = +(bid.amount * (1 + (Math.random() - 0.5) * 0.1)).toFixed(4);
           return {
-            price: +priceOffset.toFixed(2),
+            price: +priceOffset.toFixed(isFx ? 5 : 2),
             amount: freshAmount,
             total: `${(priceOffset * freshAmount / 1000).toFixed(1)}k`,
             barPercent: Math.min(100, Math.floor(freshAmount * (selectedAssetSymbol.startsWith("BTC") ? 50 : 2)))
@@ -200,7 +294,7 @@ export default function MarketIntelligence({
     return () => {
       clearInterval(handleTick);
     };
-  }, [livePrice, selectedAssetSymbol]);
+  }, [selectedAssetSymbol]);
 
   // Order Book Mock State Lists
   const [asks, setAsks] = useState<OrderBookItem[]>([
@@ -243,12 +337,103 @@ export default function MarketIntelligence({
     }
   };
 
-  const lastCandle = stockDetails?.history && stockDetails.history.length > 0
-    ? stockDetails.history[stockDetails.history.length - 1]
-    : null;
+  // SVG coordinate systems and overlay lines calculation
+  const getMinMaxPrice = () => {
+    if (candles.length === 0) return { min: 0, max: 100 };
+    let min = Infinity;
+    let max = -Infinity;
+    candles.forEach((c) => {
+      if (c.low < min) min = c.low;
+      if (c.high > max) max = c.high;
+    });
+    const range = max - min;
+    const padding = range > 0 ? range * 0.08 : currentAsset.price * 0.01;
+    return {
+      min: min - padding,
+      max: max + padding
+    };
+  };
 
-  const vols = stockDetails?.history?.map((d: any) => d.volume || 0) || [];
-  const maxVol = Math.max(...vols) || 1;
+  const { min: minPrice, max: maxPrice } = getMinMaxPrice();
+
+  const svgHeight = 280;
+  const svgWidth = 800;
+  const chartHeight = 220;
+  const chartBottom = 250;
+
+  const scaleY = (val: number) => {
+    if (maxPrice === minPrice) return chartBottom - chartHeight / 2;
+    const ratio = (val - minPrice) / (maxPrice - minPrice);
+    return chartBottom - ratio * chartHeight;
+  };
+
+  const count = candles.length;
+  const leftPadding = 30;
+  const rightPadding = 100;
+  const colWidth = count > 0 ? (svgWidth - leftPadding - rightPadding) / count : 40;
+
+  // Horizontal dynamic grid lines
+  const gridLinesCount = 4;
+  const gridLines = Array.from({ length: gridLinesCount }).map((_, idx) => {
+    const ratio = idx / (gridLinesCount - 1);
+    const priceVal = maxPrice - ratio * (maxPrice - minPrice);
+    const yVal = scaleY(priceVal);
+    return {
+      price: priceVal,
+      y: yVal
+    };
+  });
+
+  // Calculate indicator overlays
+  const maPoints: { x: number; y: number }[] = [];
+  const emaPoints: { x: number; y: number }[] = [];
+  const upperBandsPoints: { x: number; y: number }[] = [];
+  const lowerBandsPoints: { x: number; y: number }[] = [];
+
+  if (count > 0) {
+    // MA 4
+    for (let i = 0; i < count; i++) {
+      const windowSize = 4;
+      const start = Math.max(0, i - windowSize + 1);
+      let sum = 0;
+      for (let j = start; j <= i; j++) {
+        sum += candles[j].close;
+      }
+      const avg = sum / (i - start + 1);
+      maPoints.push({
+        x: leftPadding + i * colWidth + colWidth / 2,
+        y: scaleY(avg)
+      });
+    }
+
+    // EMA
+    let prevEma = candles[0].close;
+    const alpha = 0.45;
+    for (let i = 0; i < count; i++) {
+      const emaVal = candles[i].close * alpha + prevEma * (1 - alpha);
+      emaPoints.push({
+        x: leftPadding + i * colWidth + colWidth / 2,
+        y: scaleY(emaVal)
+      });
+      prevEma = emaVal;
+    }
+
+    // Bollinger style bands
+    for (let i = 0; i < count; i++) {
+      const mid = candles[i].close;
+      const dev = mid * (currentAsset.price < 5 ? 0.0012 : 0.012);
+      const xVal = leftPadding + i * colWidth + colWidth / 2;
+      upperBandsPoints.push({ x: xVal, y: scaleY(mid + dev) });
+      lowerBandsPoints.push({ x: xVal, y: scaleY(mid - dev) });
+    }
+  }
+
+  const maD = splinePath(maPoints);
+  const emaD = splinePath(emaPoints);
+  const upperD = splinePath(upperBandsPoints);
+  const lowerD = splinePath(lowerBandsPoints);
+
+  const activeCandle = hoveredIdx !== null ? candles[hoveredIdx] : (candles.length > 0 ? candles[candles.length - 1] : null);
 
   return (
     <div className="space-y-6">
@@ -297,7 +482,7 @@ export default function MarketIntelligence({
                 ? "text-rose-500 font-black" 
                 : "text-on-surface"
             }`}>
-              {livePrice ? livePrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+              {livePrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
 
@@ -421,10 +606,10 @@ export default function MarketIntelligence({
             </div>
 
             {/* Simulated interactive High Fidelity Candlestick visual grid */}
-            <div className="flex-1 relative bg-white overflow-hidden p-4 h-96 flex flex-col justify-between">
+            <div className="flex-1 relative bg-white overflow-hidden p-4 h-96 flex flex-col justify-end">
               
               {/* Radial dynamic background grid point markers */}
-              <div className="absolute inset-0 opacity-10 pointer-events-none select-none">
+              <div className="absolute inset-0 opacity-15 pointer-events-none select-none">
                 <div 
                   className="w-full h-full" 
                   style={{ 
@@ -434,139 +619,225 @@ export default function MarketIntelligence({
                 />
               </div>
 
-              {isLoadingHistory ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-white/70 z-10">
-                  <div className="flex flex-col items-center gap-2">
-                    <RefreshCw className="w-8 h-8 text-primary animate-spin" />
-                    <span className="text-xs font-bold text-on-surface-variant">Loading real-time yfinance histories...</span>
-                  </div>
-                </div>
-              ) : null}
+              {/* Candles container layout representation using scale-independent vector lines */}
+              <div className="relative w-full h-[280px] select-none z-10">
+                <svg 
+                  viewBox={`0 0 ${svgWidth} ${svgHeight}`} 
+                  className="w-full h-full select-none"
+                  onMouseLeave={() => setHoveredIdx(null)}
+                >
+                  {/* Grid lines */}
+                  {gridLines.map((grid, index) => (
+                    <g key={index} className="opacity-40">
+                      <line 
+                        x1={leftPadding} 
+                        y1={grid.y} 
+                        x2={svgWidth - rightPadding} 
+                        y2={grid.y} 
+                        stroke="#cbd5e1" 
+                        strokeDasharray="4 4" 
+                        strokeWidth="1" 
+                      />
+                      <text 
+                        x={svgWidth - rightPadding + 8} 
+                        y={grid.y + 3} 
+                        className="fill-slate-400 font-mono text-[9px]"
+                        textAnchor="start"
+                      >
+                        {grid.price.toLocaleString(undefined, {
+                          minimumFractionDigits: selectedAssetSymbol.includes("X") ? 4 : 2,
+                          maximumFractionDigits: selectedAssetSymbol.includes("X") ? 4 : 2
+                        })}
+                      </text>
+                    </g>
+                  ))}
 
-              {/* Hovered / Real-time data panel */}
-              <div className="flex justify-between items-center text-xs font-mono p-2 border-b border-slate-100 bg-slate-50/50 rounded-xl relative z-10">
-                <div className="flex gap-4">
-                  <span className="text-slate-400">DATE: <strong className="text-on-surface">{hoveredCandle ? hoveredCandle.date : (lastCandle?.date || "N/A")}</strong></span>
-                  <span className="text-slate-400">O: <strong className="text-on-surface">${hoveredCandle ? hoveredCandle.open.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.open?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
-                  <span className="text-slate-400">H: <strong className="text-emerald-500">${hoveredCandle ? hoveredCandle.high.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.high?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
-                  <span className="text-slate-400">L: <strong className="text-rose-500">${hoveredCandle ? hoveredCandle.low.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.low?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
-                  <span className="text-slate-400">C: <strong className="text-on-surface">${hoveredCandle ? hoveredCandle.close.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.close?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
-                </div>
-                {indicators.includes("MA") && (
-                  <span className="text-blue-500 font-bold hidden sm:inline">SMA50: ${hoveredCandle ? hoveredCandle.sma50?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.sma50?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</span>
-                )}
-              </div>
+                  {/* RSI Bollinger Envelopes */}
+                  {indicators.includes("RSI") && upperBandsPoints.length > 0 && (
+                    <>
+                      <path 
+                        d={`${upperD} L ${lowerBandsPoints.slice().reverse().map(p => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' L ')} Z`}
+                        fill="#0058be" 
+                        fillOpacity="0.04" 
+                      />
+                      <path 
+                        d={upperD} 
+                        fill="none" 
+                        stroke="#3b82f6" 
+                        strokeWidth="1.2" 
+                        strokeOpacity="0.5"
+                        strokeDasharray="2 2"
+                      />
+                      <path 
+                        d={lowerD} 
+                        fill="none" 
+                        stroke="#3b82f6" 
+                        strokeWidth="1.2" 
+                        strokeOpacity="0.5"
+                        strokeDasharray="2 2"
+                      />
+                    </>
+                  )}
 
-              {/* Dynamic SVG chart drawing candles and 50 EMA Zone */}
-              <div className="relative w-full h-[260px] select-none mt-2">
-                {stockDetails?.history && stockDetails.history.length > 0 ? (
-                  (() => {
-                    const isFx = selectedAssetSymbol.endsWith("=X");
-                    const hist = stockDetails.history;
-                    const prices = hist.map((d: any) => [d.open, d.high, d.low, d.close]).flat();
-                    const minPrice = Math.min(...prices);
-                    const maxPrice = Math.max(...prices);
-                    const priceRange = maxPrice - minPrice || 1.0;
-                    const yMin = minPrice - priceRange * 0.05;
-                    const yMax = maxPrice + priceRange * 0.05;
-                    const yRange = yMax - yMin;
+                  {/* DMA Moving Average */}
+                  {indicators.includes("MA") && maPoints.length > 0 && (
+                    <path 
+                      d={maD} 
+                      fill="none" 
+                      stroke="#0058be" 
+                      strokeWidth="2" 
+                      strokeLinecap="round"
+                      className="transition-all duration-300"
+                    />
+                  )}
 
-                    const chartWidth = 780;
-                    const chartHeight = 220;
+                  {/* EMA Zone line */}
+                  {indicators.includes("EMA") && emaPoints.length > 0 && (
+                    <path 
+                      d={emaD} 
+                      fill="none" 
+                      stroke="#f59e0b" 
+                      strokeWidth="1.5" 
+                      strokeDasharray="4 4"
+                      strokeLinecap="round"
+                      className="transition-all duration-300"
+                    />
+                  )}
 
-                    const mapY = (price: number) => chartHeight - ((price - yMin) / yRange) * (chartHeight - 30) - 15;
-                    const candleWidth = chartWidth / hist.length;
+                  {/* Time indicator bottom labels */}
+                  {candles.map((candle, idx) => {
+                    if (idx % 3 !== 0 && idx !== candles.length - 1) return null;
+                    const x = leftPadding + idx * colWidth + colWidth / 2;
+                    return (
+                      <text 
+                        key={`time-${idx}`}
+                        x={x}
+                        y={svgHeight - 4}
+                        className="fill-slate-400 font-mono text-[9px]"
+                        textAnchor="middle"
+                      >
+                        {candle.time}
+                      </text>
+                    );
+                  })}
 
-                    // Compute points for SMA50
-                    const smaPoints = hist
-                      .map((day: any, i: number) => {
-                        if (day.sma50 === null || day.sma50 === undefined) return null;
-                        const x = i * candleWidth + candleWidth / 2;
-                        const y = mapY(day.sma50);
-                        return `${x},${y}`;
-                      })
-                      .filter((p: any) => p !== null)
-                      .join(" ");
+                  {/* Crosshair vertical line */}
+                  {hoveredIdx !== null && (
+                    <line 
+                      x1={leftPadding + hoveredIdx * colWidth + colWidth / 2}
+                      y1={10}
+                      x2={leftPadding + hoveredIdx * colWidth + colWidth / 2}
+                      y2={svgHeight - 20}
+                      stroke="#475569"
+                      strokeWidth="1"
+                      strokeDasharray="3 3"
+                      strokeOpacity="0.5"
+                    />
+                  )}
+
+                  {/* Candlesticks & Volumes */}
+                  {candles.map((candle, idx) => {
+                    const xCenter = leftPadding + idx * colWidth + colWidth / 2;
+                    const candleWidth = Math.min(16, colWidth * 0.6);
+                    const openY = scaleY(candle.open);
+                    const closeY = scaleY(candle.close);
+                    const highY = scaleY(candle.high);
+                    const lowY = scaleY(candle.low);
+
+                    const isBullish = candle.close >= candle.open;
+                    const fillHex = isBullish ? "#10b981" : "#ef4444";
+                    const strokeHex = fillHex;
+
+                    // Simulated volume values
+                    const volHeight = Math.min(28, 5 + (idx % 4) * 6 + ((candle.high - candle.low) / (maxPrice - minPrice || 1)) * 30);
 
                     return (
-                      <svg width="100%" height="100%" viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="overflow-visible">
-                        {/* SMA line overlay */}
-                        {indicators.includes("MA") && smaPoints && (
-                          <polyline
-                            points={smaPoints}
-                            fill="none"
-                            stroke="#0058be"
-                            strokeWidth="2.5"
-                            strokeDasharray="4 3"
-                            className="drop-shadow-[0_2px_4px_rgba(0,88,190,0.3)]"
-                          />
-                        )}
-
-                        {/* Candlesticks loop */}
-                        {hist.map((day: any, i: number) => {
-                          const x = i * candleWidth;
-                          const yOpen = mapY(day.open);
-                          const yClose = mapY(day.close);
-                          const yHigh = mapY(day.high);
-                          const yLow = mapY(day.low);
-
-                          const isBullish = day.close >= day.open;
-                          const candleColor = isBullish ? "#00c285" : "#ff4d6d";
-
-                          return (
-                            <g 
-                              key={i} 
-                              className="cursor-crosshair"
-                              onMouseEnter={() => setHoveredCandle(day)}
-                              onMouseLeave={() => setHoveredCandle(null)}
-                            >
-                              {/* Wick line */}
-                              <line
-                                x1={x + (candleWidth - 2) / 2}
-                                y1={yHigh}
-                                x2={x + (candleWidth - 2) / 2}
-                                y2={yLow}
-                                stroke={candleColor}
-                                strokeWidth="1.5"
-                              />
-                              {/* Body rect */}
-                              <rect
-                                x={x}
-                                y={Math.min(yOpen, yClose)}
-                                width={Math.max(2, candleWidth - 3)}
-                                height={Math.max(1.5, Math.abs(yOpen - yClose))}
-                                fill={candleColor}
-                                stroke={candleColor}
-                                strokeWidth="0.5"
-                                rx="1.5"
-                                className="transition-all hover:brightness-110"
-                              />
-                            </g>
-                          );
-                        })}
-                      </svg>
+                      <g key={idx}>
+                        {/* Volume bar at bottom */}
+                        <rect 
+                          x={xCenter - candleWidth / 2} 
+                          y={svgHeight - 20 - volHeight}
+                          width={candleWidth} 
+                          height={volHeight}
+                          fill={fillHex} 
+                          fillOpacity="0.12" 
+                          rx="1"
+                        />
+                        {/* Shadow wick line */}
+                        <line 
+                          x1={xCenter} 
+                          y1={highY} 
+                          x2={xCenter} 
+                          y2={lowY} 
+                          stroke={strokeHex} 
+                          strokeWidth="1.5" 
+                        />
+                        {/* Candlestick body rect */}
+                        <rect 
+                          x={xCenter - candleWidth / 2} 
+                          y={Math.min(openY, closeY)} 
+                          width={candleWidth} 
+                          height={Math.max(2, Math.abs(closeY - openY))}
+                          fill={fillHex} 
+                          stroke={strokeHex}
+                          strokeWidth="1"
+                          rx="1.5"
+                        />
+                      </g>
                     );
-                  })()
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <span className="text-xs text-slate-400">Failed to render candles layout.</span>
-                  </div>
-                )}
+                  })}
+
+                  {/* Transparent hover boxes for interactive precision crosshair tracking */}
+                  {candles.map((_, idx) => (
+                    <rect 
+                      key={`hit-${idx}`}
+                      x={leftPadding + idx * colWidth}
+                      y={0}
+                      width={colWidth}
+                      height={svgHeight - 20}
+                      fill="transparent"
+                      className="cursor-crosshair"
+                      onMouseEnter={() => setHoveredIdx(idx)}
+                      onMouseMove={() => setHoveredIdx(idx)}
+                    />
+                  ))}
+                </svg>
               </div>
 
-              {/* Dynamic volume bars at chart foot */}
-              <div className="absolute bottom-2 left-4 right-4 h-8 flex items-end gap-[2px] opacity-10 pointer-events-none select-none">
-                {stockDetails?.history?.map((day: any, idx: number) => {
-                  const isBullish = day.close >= day.open;
-                  const heightPct = Math.max(10, Math.round((day.volume / maxVol) * 100));
-                  return (
-                    <div 
-                      key={idx} 
-                      className={`flex-1 rounded-t-sm ${isBullish ? "bg-secondary" : "bg-rose-500"}`} 
-                      style={{ height: `${heightPct}%` }} 
-                    />
-                  );
-                })}
+              {/* Dynamic responsive Cursor Info Panel showing OHLC */}
+              <div className="absolute top-4 left-4 glass-card rounded-xl p-3 border-slate-100 bg-white/95 backdrop-blur-md select-none w-44 shadow-lg text-[10px] z-20">
+                <div className="text-[10px] text-on-surface-variant font-bold uppercase tracking-wider mb-2 border-b border-slate-150 pb-1 flex justify-between">
+                  <span>Cursor Info</span>
+                  <span className="text-primary">{activeCandle ? activeCandle.time : ""}</span>
+                </div>
+                {activeCandle ? (
+                  <div className="space-y-1 font-mono">
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">Open:</span> 
+                      <span className="font-bold">{activeCandle.open.toLocaleString(undefined, { minimumFractionDigits: selectedAssetSymbol.includes("X") ? 4 : 2 })}</span>
+                    </p>
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">High:</span> 
+                      <span className="font-bold text-secondary">{activeCandle.high.toLocaleString(undefined, { minimumFractionDigits: selectedAssetSymbol.includes("X") ? 4 : 2 })}</span>
+                    </p>
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">Low:</span> 
+                      <span className="font-bold text-rose-500">{activeCandle.low.toLocaleString(undefined, { minimumFractionDigits: selectedAssetSymbol.includes("X") ? 4 : 2 })}</span>
+                    </p>
+                    <p className="flex justify-between">
+                      <span className="text-slate-400">Close:</span> 
+                      <span className={`font-bold ${activeCandle.close >= activeCandle.open ? "text-secondary" : "text-rose-500"}`}>
+                        {activeCandle.close.toLocaleString(undefined, { minimumFractionDigits: selectedAssetSymbol.includes("X") ? 4 : 2 })}
+                      </span>
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-slate-400">Initializing chart...</p>
+                )}
+                <div className="border-t border-slate-100 mt-2 pt-1.5 text-[10px] text-on-surface-variant flex justify-between">
+                  <span>24h Vol:</span>
+                  <span className="font-bold text-slate-800">{currentAsset.volume24h}</span>
+                </div>
               </div>
 
             </div>
@@ -685,11 +956,11 @@ export default function MarketIntelligence({
               <span className={`text-lg font-black font-mono tracking-tight flex items-center gap-1 ${
                 priceFlashColor === "green" ? "text-secondary" : priceFlashColor === "red" ? "text-rose-500" : "text-secondary"
               }`}>
-                {livePrice ? livePrice.toLocaleString("en-US", { minimumFractionDigits: 2 }) : "0.00"}
+                {livePrice.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                 <ChevronUp className="w-4 h-4 status-pulse align-middle" />
               </span>
               <span className="text-[10px] text-on-surface-variant font-mono">
-                Last Price: ${currentAsset.price ? currentAsset.price.toLocaleString() : "0.00"}
+                Last Price: ${currentAsset.price.toLocaleString()}
               </span>
             </div>
 
@@ -746,100 +1017,6 @@ export default function MarketIntelligence({
             </div>
           </div>
 
-          {/* Automated Node Execution Order Desk */}
-          <div className="glass-card rounded-2xl p-6 bg-gradient-to-br from-primary/5 to-white/70 border-primary/10">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <Sliders className="w-4 h-4" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">
-                  Automated Node Execution
-                </h3>
-                <p className="text-[10px] text-on-surface-variant">Setup targets & initiate broker trade</p>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {/* Ticker / Price preview */}
-              <div className="flex justify-between items-center p-3 rounded-xl bg-white border border-slate-100 font-mono text-xs">
-                <div>
-                  <span className="text-slate-400">TICKER</span>
-                  <span className="font-bold block text-on-surface">{selectedAssetSymbol}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-slate-400">ENTRY PRICE</span>
-                  <span className="font-bold block text-primary">${livePrice.toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 })}</span>
-                </div>
-              </div>
-
-              {/* Quantity Input */}
-              <div>
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider block mb-1.5 pl-1">
-                  Quantity
-                </label>
-                <div className="relative">
-                  <input 
-                    type="number"
-                    min="1"
-                    value={tradeQty}
-                    onChange={(e) => setTradeQty(Math.max(1, parseInt(e.target.value) || 0))}
-                    className="w-full text-sm border border-slate-200 focus:border-primary focus:ring-1 focus:ring-primary/20 rounded-xl px-3 py-2.5 bg-white font-mono"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">UNITS</span>
-                </div>
-              </div>
-
-              {/* Stops & Targets info panel */}
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-2">
-                <div className="flex justify-between items-center font-mono">
-                  <span className="text-on-surface-variant flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-                    Initial Stop Loss:
-                  </span>
-                  <span className="font-bold text-rose-600">
-                    ${stockDetails ? (stockDetails.initial_stop * tradeQty).toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 }) : "0.00"}
-                    <span className="text-[10px] text-slate-400 ml-1 font-medium">(${stockDetails ? stockDetails.initial_stop : "0.00"}/unit)</span>
-                  </span>
-                </div>
-                <div className="flex justify-between items-center font-mono">
-                  <span className="text-on-surface-variant flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
-                    Trailing Stop Loss (ATR):
-                  </span>
-                  <span className="font-bold text-amber-500">
-                    ${stockDetails ? (stockDetails.atr_trailing_stop * tradeQty).toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 }) : "0.00"}
-                    <span className="text-[10px] text-slate-400 ml-1 font-medium">(${stockDetails ? stockDetails.atr_trailing_stop : "0.00"}/unit)</span>
-                  </span>
-                </div>
-                <div className="flex justify-between items-center font-mono">
-                  <span className="text-on-surface-variant flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                    Target Sell Price (1:2 R:R):
-                  </span>
-                  <span className="font-bold text-emerald-600">
-                    ${stockDetails ? (stockDetails.target_price * tradeQty).toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 }) : "0.00"}
-                    <span className="text-[10px] text-slate-400 ml-1 font-medium">(${stockDetails ? stockDetails.target_price : "0.00"}/unit)</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Initiate Order dispatcher */}
-              <button 
-                onClick={handleInitiateBuy}
-                disabled={isOrdering || isLoadingHistory}
-                className={`w-full py-3 bg-primary hover:bg-opacity-95 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-primary/20 ${isOrdering ? "opacity-60 cursor-not-allowed" : ""}`}
-              >
-                {isOrdering ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <TrendingUp className="w-4 h-4" />
-                )}
-                <span>INITIATE AUTOMATED BUY NODE</span>
-              </button>
-            </div>
-          </div>
-
         </div>
 
       </div>
@@ -848,9 +1025,12 @@ export default function MarketIntelligence({
       <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {newsFlashes.map((item) => {
           return (
-            <div 
+            <a 
               key={item.id}
-              className="glass-card rounded-2xl p-6 flex flex-col justify-between hover:border-primary/30 transition-all duration-350 cursor-pointer group"
+              href={item.url || "#"}
+              target={item.url && item.url !== "#" ? "_blank" : undefined}
+              rel={item.url && item.url !== "#" ? "noopener noreferrer" : undefined}
+              className="glass-card rounded-2xl p-6 flex flex-col justify-between hover:border-primary/30 transition-all duration-350 cursor-pointer group block"
             >
               <div>
                 <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-md mb-3.5 inline-block ${
@@ -870,7 +1050,7 @@ export default function MarketIntelligence({
                 <Clock className="w-3.5 h-3.5 bg-transparent text-slate-400" />
                 {item.time} &middot; <span className="text-primary font-bold">{item.sentiment}</span>
               </p>
-            </div>
+            </a>
           );
         })}
       </section>

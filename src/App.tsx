@@ -18,7 +18,8 @@ import {
   Wallet, 
   BookOpen, 
   HelpCircle,
-  Plus
+  Plus,
+  Layers
 } from "lucide-react";
 
 import { 
@@ -27,7 +28,8 @@ import {
   ExecutionLog, 
   TradingBotStrategy,
   TransactionItem,
-  NewsFlashItem
+  NewsFlashItem,
+  PositionItem
 } from "./types";
 
 import { 
@@ -43,88 +45,156 @@ import CommandCenter from "./components/CommandCenter";
 import MarketIntelligence from "./components/MarketIntelligence";
 import StrategyLab from "./components/StrategyLab";
 import Analytics from "./components/Analytics";
+import LiveScanner from "./components/LiveScanner";
 
 export default function App() {
   // Navigation tabs selection
-  const [activeTab, setActiveTab] = useState<"command" | "intelligence" | "strategy" | "analytics">("command");
+  const [activeTab, setActiveTab] = useState<"command" | "intelligence" | "strategy" | "analytics" | "scanner">("command");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Global State Stores
-  const [assets, setAssets] = useState<MarketAsset[]>(INITIAL_ASSETS);
-  const [signals, setSignals] = useState<SecuritySignal[]>(INITIAL_SIGNALS);
-  const [executionFeed, setExecutionFeed] = useState<ExecutionLog[]>(INITIAL_EXECUTION_FEED);
-  const [newsFlashes, setNewsFlashes] = useState<NewsFlashItem[]>(INITIAL_NEWS_FLASHES);
-  const [transactions, setTransactions] = useState<TransactionItem[]>(INITIAL_TRANSACTIONS);
+  const [assets, setAssets] = useState<MarketAsset[]>([]);
+  const [signals, setSignals] = useState<SecuritySignal[]>([]);
+  const [executionFeed, setExecutionFeed] = useState<ExecutionLog[]>([]);
+  const [newsFlashes, setNewsFlashes] = useState<NewsFlashItem[]>([]);
+  const [transactions, setTransactions] = useState<TransactionItem[]>([]);
+  const [positions, setPositions] = useState<PositionItem[]>([]);
+  const [portfolioFinancials, setPortfolioFinancials] = useState<any>({ cash: 100000.0, equity: 100000.0, unrealized_pnl: 0.0 });
   
   // Custom generated strategy bots fleet
   const [deployedBots, setDeployedBots] = useState<TradingBotStrategy[]>([]);
-  const [activeBotsCount, setActiveBotsCount] = useState(12);
+  const [activeBotsCount, setActiveBotsCount] = useState(4);
 
   // Address wallet simulation
   const [walletConnected, setWalletConnected] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
 
-  const [currentSelectedAsset, setCurrentSelectedAsset] = useState("BTC/USDT");
+  const [currentSelectedAsset, setCurrentSelectedAsset] = useState("AAPL");
 
   // Global Search keyword filter for top level header
   const [globalSearch, setGlobalSearch] = useState("");
 
-  // Simulated live automated action loops from deployed/active bots
+  // Live polling sync loop with Python FastAPI (every 5 seconds)
   useEffect(() => {
-    const handleLogsLoop = setInterval(() => {
-      // Pick a random asset
-      const randomAssetObj = assets[Math.floor(Math.random() * assets.length)];
-      const botNames = ["AlphaBot v2.4", "ScalperCore", "MomentumEngine", "GridMaster v1", ...deployedBots.map(b => b.botName)];
-      const randomBot = botNames[Math.floor(Math.random() * botNames.length)];
-      
-      const operations: ExecutionLog["type"][] = ["Long", "Short", "Re-leveraged", "Take Profit", "Stop Loss"];
-      const randomOp = operations[Math.floor(Math.random() * operations.length)];
-      
-      const statuses: ExecutionLog["status"][] = ["Entered", "Exit", "Modified", "Triggered"];
-      const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
-
-      const now = new Date();
-      const timeStr = now.toTimeString().split(" ")[0];
-
-      const priceStr = `$${(randomAssetObj.price * (1 + (Math.random() - 0.5) * 0.01)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-      const newLog: ExecutionLog = {
-        id: Math.random().toString(),
-        asset: randomAssetObj.symbol,
-        type: randomOp,
-        time: timeStr,
-        price: priceStr,
-        agentName: randomBot,
-        status: randomStatus,
-        changeDirection: Math.random() > 0.4 ? "positive" : "negative",
-        changeValue: `+${(Math.random() * 2).toFixed(2)}%`
-      };
-
-      // Append to feed, keeping last 8
-      setExecutionFeed((prev) => [newLog, ...prev.slice(0, 9)]);
-
-      // Occasionally add a matching transaction row to history
-      if (Math.random() > 0.6) {
-        const txTypes = ["Buy Order", "Sell Order", "Yield Claim", "Withdrawal"];
-        const chosenTxType = txTypes[Math.floor(Math.random() * txTypes.length)];
+    const fetchData = async () => {
+      try {
+        // Fetch Scan results
+        const scanRes = await fetch("/api/scan");
+        const scanData = await scanRes.json();
         
-        const newTx: TransactionItem = {
-          id: `tx_${Math.random().toString()}`,
-          asset: randomAssetObj.name,
-          symbol: randomAssetObj.symbol.split("/")[0],
-          type: chosenTxType,
-          amount: `${(Math.random() * 1.5).toFixed(2)} ${randomAssetObj.symbol.split("/")[0]}`,
-          status: Math.random() > 0.15 ? "COMPLETED" : "PROCESSING",
-          time: "Just now",
-          iconName: randomAssetObj.icon
-        };
-        setTransactions((prev) => [newTx, ...prev.slice(0, 7)]);
+        let currentAssetsList = assets;
+        if (scanData && scanData.stocks) {
+          // Map backend stocks to MarketAsset[]
+          const mappedAssets: MarketAsset[] = scanData.stocks.map((stock: any) => {
+            let aiSentiment: MarketAsset["aiSentiment"] = "Neutral";
+            if (stock.rating === "Strong Buy") aiSentiment = "Strong Bullish";
+            else if (stock.rating === "Buy") aiSentiment = "Bullish";
+            else if (stock.rating === "Hold") aiSentiment = "Neutral";
+            else if (stock.rating === "Sell / Avoid") aiSentiment = "Bearish";
+
+            return {
+              symbol: stock.ticker,
+              name: stock.name,
+              category: stock.is_fx ? "L2" : "Spot",
+              price: stock.price,
+              change24h: stock.change_percent,
+              aiSentiment,
+              sentimentScore: Math.round(stock.overall_score),
+              volume24h: (stock.volume && stock.volume > 1e6) ? `${(stock.volume / 1e6).toFixed(1)}M` : (stock.volume ? stock.volume.toLocaleString() : "0"),
+              activeBots: stock.is_fx ? 2 : 4,
+              totalProfit: (stock.change && stock.change >= 0) ? `+$${(stock.change * 50).toFixed(0)}` : `-$${(stock.change ? Math.abs(stock.change) * 50 : 0).toFixed(0)}`,
+              dailyYield: stock.change_percent,
+              icon: stock.is_fx ? "currency_exchange" : stock.ticker === "AAPL" ? "layers" : "trending_up"
+            };
+          });
+          setAssets(mappedAssets);
+          currentAssetsList = mappedAssets;
+
+          // Update upcoming signals based on top breakout items (overall_score > 75)
+          const highConfidence = scanData.stocks
+            .filter((s: any) => s.overall_score > 75)
+            .slice(0, 5)
+            .map((s: any, idx: number) => ({
+              id: `sig_${s.ticker}_${idx}`,
+              asset: s.ticker,
+              type: s.alex_g_type || (s.rating.includes("Buy") ? "BUY" : "SELL"),
+              probability: Math.round(s.overall_score),
+              target: `$${s.target_price ? s.target_price.toLocaleString("en-US", { minimumFractionDigits: s.is_fx ? 5 : 2 }) : "0.00"}`,
+              eta: `~${12 + idx * 4}m`
+            }));
+          
+          if (highConfidence.length > 0) {
+            setSignals(highConfidence);
+          }
+        }
+
+        // Fetch Portfolio holdings & financials
+        const portfolioRes = await fetch("/api/portfolio");
+        const portfolioData = await portfolioRes.json();
+        
+        if (portfolioData) {
+          if (portfolioData.positions) {
+            setPositions(portfolioData.positions);
+          }
+          if (portfolioData.financials) {
+            setPortfolioFinancials(portfolioData.financials);
+          }
+        }
+
+        // Fetch Analytics ledger/transactions
+        const analyticsRes = await fetch("/api/analytics");
+        const analyticsData = await analyticsRes.json();
+        if (analyticsData && analyticsData.transactions) {
+          const mappedTxs: TransactionItem[] = analyticsData.transactions.slice(0, 10).map((t: any) => ({
+            id: t.id || `tx_${Math.random()}`,
+            asset: t.name || t.ticker,
+            symbol: t.ticker,
+            type: `${t.type} ${t.qty} Qty`,
+            amount: t.type === "BUY" ? `- $${t.cost.toFixed(2)}` : `+ $${(t.qty * t.price).toFixed(2)}`,
+            status: t.status || "COMPLETED",
+            time: t.buy_date || t.time || "Just now",
+            iconName: "coins"
+          }));
+          setTransactions(mappedTxs);
+        }
+
+        // Generate dynamic live execution feed notifications based on active portfolio and scanned items
+        if (currentAssetsList.length > 0) {
+          const randomAssetObj = currentAssetsList[Math.floor(Math.random() * currentAssetsList.length)];
+          const botNames = ["AlphaBot v2.4", "ScalperCore", "MomentumEngine", "GridMaster v1", ...deployedBots.map(b => b.botName)];
+          const randomBot = botNames[Math.floor(Math.random() * botNames.length)];
+          const operations: ExecutionLog["type"][] = ["Long", "Short", "Re-leveraged", "Take Profit", "Stop Loss"];
+          const randomOp = operations[Math.floor(Math.random() * operations.length)];
+          const statuses: ExecutionLog["status"][] = ["Entered", "Exit", "Modified", "Triggered"];
+          const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
+          const now = new Date();
+          const timeStr = now.toTimeString().split(" ")[0];
+          const priceStr = `$${(randomAssetObj.price * (1 + (Math.random() - 0.5) * 0.005)).toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
+
+          const newLog: ExecutionLog = {
+            id: Math.random().toString(),
+            asset: randomAssetObj.symbol,
+            type: randomOp,
+            time: timeStr,
+            price: priceStr,
+            agentName: randomBot,
+            status: randomStatus,
+            changeDirection: Math.random() > 0.4 ? "positive" : "negative",
+            changeValue: `+${(Math.random() * 2).toFixed(2)}%`
+          };
+
+          setExecutionFeed((prev) => [newLog, ...prev.slice(0, 9)]);
+        }
+
+      } catch (err) {
+        console.error("Error fetching live backend sync data:", err);
       }
+    };
 
-    }, 13000); // Trigger a realistic action log update every 13s
-
-    return () => clearInterval(handleLogsLoop);
-  }, [assets, deployedBots]);
+    fetchData(); // Initial execution
+    const interval = setInterval(fetchData, 5000); // 5-second polling loop
+    return () => clearInterval(interval);
+  }, [deployedBots, assets]);
 
   // Connect wallet toggle simulation
   const handleConnectWallet = () => {
@@ -235,6 +305,19 @@ export default function App() {
             >
               <TrendingUp className="w-4.5 h-4.5" />
               <span>Market Intelligence</span>
+            </button>
+
+            {/* Live Terminal View Selection */}
+            <button
+              onClick={() => { setActiveTab("scanner"); setMobileMenuOpen(false); }}
+              className={`w-full flex items-center gap-3 rounded-xl px-4 py-3 font-semibold transition-all duration-200 text-xs ${
+                activeTab === "scanner"
+                  ? "bg-primary/10 text-primary font-bold shadow-sm"
+                  : "text-on-surface-variant hover:bg-slate-100/50 hover:translate-x-0.5"
+              }`}
+            >
+              <Layers className="w-4.5 h-4.5" />
+              <span>Live Terminal</span>
             </button>
 
             {/* StrategyLab View Selection */}
@@ -386,6 +469,8 @@ export default function App() {
               executionFeed={executionFeed}
               activeBotsCount={activeBotsCount}
               deployedBots={deployedBots}
+              positions={positions}
+              portfolioFinancials={portfolioFinancials}
               onNavigateToIntelligence={handleViewAssetDetails}
               onNavigateToStrategy={() => setActiveTab("strategy")}
             />
@@ -397,6 +482,13 @@ export default function App() {
               newsFlashes={newsFlashes}
               selectedAssetSymbol={currentSelectedAsset}
               onSelectAsset={setCurrentSelectedAsset}
+            />
+          )}
+
+          {activeTab === "scanner" && (
+            <LiveScanner 
+              assets={assets}
+              onNavigateToIntelligence={handleViewAssetDetails}
             />
           )}
 

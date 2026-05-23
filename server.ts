@@ -12,6 +12,59 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Proxy scanner, portfolio, settings, trade, stock details, analytics, exports to FastAPI (Port 8000)
+const FASTAPI_URL = "http://127.0.0.1:8000";
+app.all("/api/:endpoint(*)", async (req, res, next) => {
+  const endpoint = req.params.endpoint;
+  // Let server.ts handle Gemini AI routes natively
+  if (["ai-status", "insight", "strategy/generate"].includes(endpoint)) {
+    return next();
+  }
+
+  try {
+    const targetUrl = `${FASTAPI_URL}${req.originalUrl}`;
+    const method = req.method;
+    
+    // Copy incoming headers
+    const headers: any = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string" && k.toLowerCase() !== "host") {
+        headers[k] = v;
+      }
+    }
+    
+    const fetchOptions: any = {
+      method,
+      headers
+    };
+
+    if (!["GET", "HEAD"].includes(method) && req.body && Object.keys(req.body).length > 0) {
+      fetchOptions.body = JSON.stringify(req.body);
+      fetchOptions.headers["content-type"] = "application/json";
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+
+    // Forward status and headers
+    res.status(response.status);
+    response.headers.forEach((v, k) => {
+      if (k.toLowerCase() !== "transfer-encoding") {
+        res.setHeader(k, v);
+      }
+    });
+
+    // Send arrayBuffer body to support binary/Excel streaming
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    console.error(`Error proxying to FastAPI endpoint /api/${endpoint}:`, err);
+    res.status(502).json({
+      success: false,
+      error: `Could not reach backend trading server at ${FASTAPI_URL}.`
+    });
+  }
+});
+
 // Lazy-initialized Gemini Client
 let aiClient: GoogleGenAI | null = null;
 function getAIClient(): GoogleGenAI {

@@ -97,3 +97,20 @@ export interface TransactionItem {
   time: string;
   iconName: string;
 }
+
+export interface PositionItem {
+  ticker: string;
+  name: string;
+  qty: number;
+  buy_price: number;
+  current_price: number;
+  highest_price: number;
+  initial_stop: number;
+  trailing_stop: number;
+  target_price: number;
+  buy_date: string;
+  cost: number;
+  value: number;
+  pnl: number;
+  pnl_percent: number;
+}

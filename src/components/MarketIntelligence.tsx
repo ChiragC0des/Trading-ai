@@ -41,7 +41,20 @@ export default function MarketIntelligence({
   selectedAssetSymbol,
   onSelectAsset
 }: MarketIntelligenceProps) {
-  const currentAsset = assets.find((a) => a.symbol === selectedAssetSymbol) || assets[0];
+  const currentAsset = assets.find((a) => a.symbol === selectedAssetSymbol) || assets[0] || {
+    symbol: selectedAssetSymbol || "AAPL",
+    name: "Loading Stock Data...",
+    category: "Spot",
+    price: 0.0,
+    change24h: 0.0,
+    aiSentiment: "Neutral",
+    sentimentScore: 50,
+    volume24h: "0",
+    activeBots: 0,
+    totalProfit: "$0",
+    dailyYield: 0.0,
+    icon: "trending_up"
+  };
   
   // Interactive Timeframe
   const [timeframe, setTimeframe] = useState<"1m" | "15m" | "1h" | "4h" | "1d">("4h");
@@ -54,10 +67,71 @@ export default function MarketIntelligence({
   const [livePrice, setLivePrice] = useState(currentAsset.price);
   const [priceFlashColor, setPriceFlashColor] = useState<"green" | "red" | "neutral">("neutral");
 
-  // Keep livePrice in sync when the user changes selected asset manually
+  // Historical data states
+  const [stockDetails, setStockDetails] = useState<any>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [hoveredCandle, setHoveredCandle] = useState<any>(null);
+  
+  // Order desk states
+  const [tradeQty, setTradeQty] = useState(10);
+  const [isOrdering, setIsOrdering] = useState(false);
+
+  // Keep livePrice in sync when the user changes selected asset manually or when asset prices update
   useEffect(() => {
-    setLivePrice(currentAsset.price);
+    if (currentAsset) {
+      setLivePrice(currentAsset.price);
+    }
+  }, [selectedAssetSymbol, currentAsset]);
+
+  useEffect(() => {
+    const fetchStockDetails = async () => {
+      setIsLoadingHistory(true);
+      try {
+        const res = await fetch(`/api/stock/${selectedAssetSymbol}`);
+        if (res.ok) {
+          const data = await res.json();
+          setStockDetails(data);
+        }
+      } catch (err) {
+        console.error("Error fetching stock history details:", err);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+    fetchStockDetails();
   }, [selectedAssetSymbol]);
+
+  const handleInitiateBuy = async () => {
+    if (!stockDetails) return;
+    setIsOrdering(true);
+    try {
+      const response = await fetch("/api/trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: selectedAssetSymbol,
+          name: stockDetails.name,
+          qty: tradeQty,
+          price: livePrice,
+          side: "BUY",
+          initial_stop: stockDetails.initial_stop,
+          trailing_stop: stockDetails.atr_trailing_stop,
+          target_price: stockDetails.target_price
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        alert(`Automated buy order successfully executed for ${selectedAssetSymbol}!`);
+      } else {
+        alert(data.detail || data.message || "Failed to execute order.");
+      }
+    } catch (err) {
+      console.error("Error executing buy order:", err);
+      alert("Error executing buy order. Check connection to FastAPI backend.");
+    } finally {
+      setIsOrdering(false);
+    }
+  };
 
   // Handle Dynamic price tick interval
   useEffect(() => {
@@ -169,6 +243,13 @@ export default function MarketIntelligence({
     }
   };
 
+  const lastCandle = stockDetails?.history && stockDetails.history.length > 0
+    ? stockDetails.history[stockDetails.history.length - 1]
+    : null;
+
+  const vols = stockDetails?.history?.map((d: any) => d.volume || 0) || [];
+  const maxVol = Math.max(...vols) || 1;
+
   return (
     <div className="space-y-6">
       
@@ -216,7 +297,7 @@ export default function MarketIntelligence({
                 ? "text-rose-500 font-black" 
                 : "text-on-surface"
             }`}>
-              {livePrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {livePrice ? livePrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
             </span>
           </div>
 
@@ -340,10 +421,10 @@ export default function MarketIntelligence({
             </div>
 
             {/* Simulated interactive High Fidelity Candlestick visual grid */}
-            <div className="flex-1 relative bg-white overflow-hidden p-8 h-96 flex flex-col justify-end">
+            <div className="flex-1 relative bg-white overflow-hidden p-4 h-96 flex flex-col justify-between">
               
               {/* Radial dynamic background grid point markers */}
-              <div className="absolute inset-0 opacity-15 pointer-events-none select-none">
+              <div className="absolute inset-0 opacity-10 pointer-events-none select-none">
                 <div 
                   className="w-full h-full" 
                   style={{ 
@@ -353,90 +434,139 @@ export default function MarketIntelligence({
                 />
               </div>
 
-              {/* Candles container layout representation */}
-              <div className="relative w-full h-[320px] flex items-end gap-3 pb-8 select-none">
-                
-                {/* Simulated candlesticks reflecting the asset direction */}
-                {/* 1 */}
-                <div className="flex-1 flex flex-col items-center justify-end group/candle mt-10">
-                  <div className="w-0.5 h-12 bg-secondary/35" />
-                  <div className="w-full max-w-[24px] h-24 bg-secondary/90 hover:bg-secondary rounded-sm transition-transform cursor-pointer shadow-md select-none" />
-                  <div className="w-0.5 h-8 bg-secondary/35" />
-                </div>
-
-                {/* 2 */}
-                <div className="flex-1 flex flex-col items-center justify-end">
-                  <div className="w-0.5 h-16 bg-rose-450 opacity-40 bg-rose-400" />
-                  <div className="w-full max-w-[24px] h-16 bg-rose-600/90 hover:bg-rose-500 rounded-sm cursor-pointer shadow-sm" />
-                  <div className="w-0.5 h-12 bg-rose-400" />
-                </div>
-
-                {/* 3 AI BUY ZONE highlight */}
-                <div className="flex-1 flex flex-col items-center justify-end relative">
-                  <div className="absolute -inset-4 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl z-0 status-pulse" />
-                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap bg-secondary text-white text-[9px] font-bold px-2 py-0.5 rounded tracking-wide uppercase select-none z-10">
-                    AI BUY ZONE
+              {isLoadingHistory ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-white/70 z-10">
+                  <div className="flex flex-col items-center gap-2">
+                    <RefreshCw className="w-8 h-8 text-primary animate-spin" />
+                    <span className="text-xs font-bold text-on-surface-variant">Loading real-time yfinance histories...</span>
                   </div>
-                  <div className="w-0.5 h-8 bg-secondary/40 z-10" />
-                  <div className="w-full max-w-[24px] h-44 bg-secondary hover:scale-x-105 duration-150 rounded-sm cursor-pointer shadow-lg z-10 relative" />
-                  <div className="w-0.5 h-10 bg-secondary/35 z-10" />
                 </div>
+              ) : null}
 
-                {/* 4 */}
-                <div className="flex-1 flex flex-col items-center justify-end">
-                  <div className="w-0.5 h-20 bg-secondary/35" />
-                  <div className="w-full max-w-[24px] h-36 bg-secondary/90 hover:bg-secondary rounded-sm cursor-pointer shadow-md" />
-                  <div className="w-0.5 h-12 bg-secondary/35" />
+              {/* Hovered / Real-time data panel */}
+              <div className="flex justify-between items-center text-xs font-mono p-2 border-b border-slate-100 bg-slate-50/50 rounded-xl relative z-10">
+                <div className="flex gap-4">
+                  <span className="text-slate-400">DATE: <strong className="text-on-surface">{hoveredCandle ? hoveredCandle.date : (lastCandle?.date || "N/A")}</strong></span>
+                  <span className="text-slate-400">O: <strong className="text-on-surface">${hoveredCandle ? hoveredCandle.open.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.open?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
+                  <span className="text-slate-400">H: <strong className="text-emerald-500">${hoveredCandle ? hoveredCandle.high.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.high?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
+                  <span className="text-slate-400">L: <strong className="text-rose-500">${hoveredCandle ? hoveredCandle.low.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.low?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
+                  <span className="text-slate-400">C: <strong className="text-on-surface">${hoveredCandle ? hoveredCandle.close.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.close?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</strong></span>
                 </div>
-
-                {/* 5 */}
-                <div className="flex-1 flex flex-col items-center justify-end">
-                  <div className="w-0.5 h-32 bg-rose-400" />
-                  <div className="w-full max-w-[24px] h-10 bg-rose-600/90 hover:bg-rose-500 rounded-sm cursor-pointer shadow-sm" />
-                  <div className="w-0.5 h-24 bg-rose-400" />
-                </div>
-
-                {/* 6 */}
-                <div className="flex-1 flex flex-col items-center justify-end">
-                  <div className="w-0.5 h-12 bg-secondary/35" />
-                  <div className="w-full max-w-[24px] h-28 bg-secondary/90 hover:bg-secondary rounded-sm cursor-pointer shadow-md" />
-                  <div className="w-0.5 h-16 bg-secondary/35" />
-                </div>
-
-                {/* 7 AI SELL ZONE highlights */}
-                <div className="flex-1 flex flex-col items-center justify-end relative">
-                  <div className="absolute -inset-4 bg-rose-500/5 border border-rose-500/20 rounded-2xl z-0" />
-                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap bg-rose-600 text-white text-[9px] font-bold px-2 py-0.5 rounded tracking-wide uppercase select-none z-10">
-                    AI SELL SIGNAL
-                  </div>
-                  <div className="w-0.5 h-16 bg-rose-400 z-10" />
-                  <div className="w-full max-w-[24px] h-48 bg-rose-600 hover:scale-x-105 duration-150 rounded-sm cursor-pointer shadow-lg z-10" />
-                  <div className="w-0.5 h-8 bg-rose-400 z-10" />
-                </div>
+                {indicators.includes("MA") && (
+                  <span className="text-blue-500 font-bold hidden sm:inline">SMA50: ${hoveredCandle ? hoveredCandle.sma50?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) : (lastCandle?.sma50?.toFixed(selectedAssetSymbol.endsWith("=X") ? 5 : 2) || "0.00")}</span>
+                )}
               </div>
 
-              {/* Float Cursor Info Panel overlay */}
-              <div className="absolute top-1/2 right-24 transform -translate-y-1/2 glass-card rounded-xl p-3.5 border-primary/20 pointer-events-none select-none select-all">
-                <p className="text-[10px] text-on-surface-variant uppercase tracking-wider mb-0.5">
-                  Cursor Info
-                </p>
-                <p className="font-mono text-sm font-bold text-primary">
-                  {livePrice.toLocaleString("en-US", { minimumFractionDigits: 2 })} USDT
-                </p>
-                <p className="text-[10px] text-on-surface-variant font-mono mt-0.5">
-                  Vol: {currentAsset.volume24h} BTC
-                </p>
+              {/* Dynamic SVG chart drawing candles and 50 EMA Zone */}
+              <div className="relative w-full h-[260px] select-none mt-2">
+                {stockDetails?.history && stockDetails.history.length > 0 ? (
+                  (() => {
+                    const isFx = selectedAssetSymbol.endsWith("=X");
+                    const hist = stockDetails.history;
+                    const prices = hist.map((d: any) => [d.open, d.high, d.low, d.close]).flat();
+                    const minPrice = Math.min(...prices);
+                    const maxPrice = Math.max(...prices);
+                    const priceRange = maxPrice - minPrice || 1.0;
+                    const yMin = minPrice - priceRange * 0.05;
+                    const yMax = maxPrice + priceRange * 0.05;
+                    const yRange = yMax - yMin;
+
+                    const chartWidth = 780;
+                    const chartHeight = 220;
+
+                    const mapY = (price: number) => chartHeight - ((price - yMin) / yRange) * (chartHeight - 30) - 15;
+                    const candleWidth = chartWidth / hist.length;
+
+                    // Compute points for SMA50
+                    const smaPoints = hist
+                      .map((day: any, i: number) => {
+                        if (day.sma50 === null || day.sma50 === undefined) return null;
+                        const x = i * candleWidth + candleWidth / 2;
+                        const y = mapY(day.sma50);
+                        return `${x},${y}`;
+                      })
+                      .filter((p: any) => p !== null)
+                      .join(" ");
+
+                    return (
+                      <svg width="100%" height="100%" viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="overflow-visible">
+                        {/* SMA line overlay */}
+                        {indicators.includes("MA") && smaPoints && (
+                          <polyline
+                            points={smaPoints}
+                            fill="none"
+                            stroke="#0058be"
+                            strokeWidth="2.5"
+                            strokeDasharray="4 3"
+                            className="drop-shadow-[0_2px_4px_rgba(0,88,190,0.3)]"
+                          />
+                        )}
+
+                        {/* Candlesticks loop */}
+                        {hist.map((day: any, i: number) => {
+                          const x = i * candleWidth;
+                          const yOpen = mapY(day.open);
+                          const yClose = mapY(day.close);
+                          const yHigh = mapY(day.high);
+                          const yLow = mapY(day.low);
+
+                          const isBullish = day.close >= day.open;
+                          const candleColor = isBullish ? "#00c285" : "#ff4d6d";
+
+                          return (
+                            <g 
+                              key={i} 
+                              className="cursor-crosshair"
+                              onMouseEnter={() => setHoveredCandle(day)}
+                              onMouseLeave={() => setHoveredCandle(null)}
+                            >
+                              {/* Wick line */}
+                              <line
+                                x1={x + (candleWidth - 2) / 2}
+                                y1={yHigh}
+                                x2={x + (candleWidth - 2) / 2}
+                                y2={yLow}
+                                stroke={candleColor}
+                                strokeWidth="1.5"
+                              />
+                              {/* Body rect */}
+                              <rect
+                                x={x}
+                                y={Math.min(yOpen, yClose)}
+                                width={Math.max(2, candleWidth - 3)}
+                                height={Math.max(1.5, Math.abs(yOpen - yClose))}
+                                fill={candleColor}
+                                stroke={candleColor}
+                                strokeWidth="0.5"
+                                rx="1.5"
+                                className="transition-all hover:brightness-110"
+                              />
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    );
+                  })()
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <span className="text-xs text-slate-400">Failed to render candles layout.</span>
+                  </div>
+                )}
               </div>
 
               {/* Dynamic volume bars at chart foot */}
-              <div className="absolute bottom-4 left-6 right-6 h-10 flex items-end gap-1 opacity-15 pointer-events-none select-none">
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "45%" }} />
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "65%" }} />
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "85%" }} />
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "55%" }} />
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "35%" }} />
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "92%" }} />
-                <div className="flex-1 bg-primary rounded-t-sm" style={{ height: "72%" }} />
+              <div className="absolute bottom-2 left-4 right-4 h-8 flex items-end gap-[2px] opacity-10 pointer-events-none select-none">
+                {stockDetails?.history?.map((day: any, idx: number) => {
+                  const isBullish = day.close >= day.open;
+                  const heightPct = Math.max(10, Math.round((day.volume / maxVol) * 100));
+                  return (
+                    <div 
+                      key={idx} 
+                      className={`flex-1 rounded-t-sm ${isBullish ? "bg-secondary" : "bg-rose-500"}`} 
+                      style={{ height: `${heightPct}%` }} 
+                    />
+                  );
+                })}
               </div>
 
             </div>
@@ -555,11 +685,11 @@ export default function MarketIntelligence({
               <span className={`text-lg font-black font-mono tracking-tight flex items-center gap-1 ${
                 priceFlashColor === "green" ? "text-secondary" : priceFlashColor === "red" ? "text-rose-500" : "text-secondary"
               }`}>
-                {livePrice.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                {livePrice ? livePrice.toLocaleString("en-US", { minimumFractionDigits: 2 }) : "0.00"}
                 <ChevronUp className="w-4 h-4 status-pulse align-middle" />
               </span>
               <span className="text-[10px] text-on-surface-variant font-mono">
-                Last Price: ${currentAsset.price.toLocaleString()}
+                Last Price: ${currentAsset.price ? currentAsset.price.toLocaleString() : "0.00"}
               </span>
             </div>
 
@@ -613,6 +743,100 @@ export default function MarketIntelligence({
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+
+          {/* Automated Node Execution Order Desk */}
+          <div className="glass-card rounded-2xl p-6 bg-gradient-to-br from-primary/5 to-white/70 border-primary/10">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                <Sliders className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">
+                  Automated Node Execution
+                </h3>
+                <p className="text-[10px] text-on-surface-variant">Setup targets & initiate broker trade</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {/* Ticker / Price preview */}
+              <div className="flex justify-between items-center p-3 rounded-xl bg-white border border-slate-100 font-mono text-xs">
+                <div>
+                  <span className="text-slate-400">TICKER</span>
+                  <span className="font-bold block text-on-surface">{selectedAssetSymbol}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-400">ENTRY PRICE</span>
+                  <span className="font-bold block text-primary">${livePrice.toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 })}</span>
+                </div>
+              </div>
+
+              {/* Quantity Input */}
+              <div>
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider block mb-1.5 pl-1">
+                  Quantity
+                </label>
+                <div className="relative">
+                  <input 
+                    type="number"
+                    min="1"
+                    value={tradeQty}
+                    onChange={(e) => setTradeQty(Math.max(1, parseInt(e.target.value) || 0))}
+                    className="w-full text-sm border border-slate-200 focus:border-primary focus:ring-1 focus:ring-primary/20 rounded-xl px-3 py-2.5 bg-white font-mono"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">UNITS</span>
+                </div>
+              </div>
+
+              {/* Stops & Targets info panel */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-2">
+                <div className="flex justify-between items-center font-mono">
+                  <span className="text-on-surface-variant flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                    Initial Stop Loss:
+                  </span>
+                  <span className="font-bold text-rose-600">
+                    ${stockDetails ? (stockDetails.initial_stop * tradeQty).toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 }) : "0.00"}
+                    <span className="text-[10px] text-slate-400 ml-1 font-medium">(${stockDetails ? stockDetails.initial_stop : "0.00"}/unit)</span>
+                  </span>
+                </div>
+                <div className="flex justify-between items-center font-mono">
+                  <span className="text-on-surface-variant flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                    Trailing Stop Loss (ATR):
+                  </span>
+                  <span className="font-bold text-amber-500">
+                    ${stockDetails ? (stockDetails.atr_trailing_stop * tradeQty).toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 }) : "0.00"}
+                    <span className="text-[10px] text-slate-400 ml-1 font-medium">(${stockDetails ? stockDetails.atr_trailing_stop : "0.00"}/unit)</span>
+                  </span>
+                </div>
+                <div className="flex justify-between items-center font-mono">
+                  <span className="text-on-surface-variant flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                    Target Sell Price (1:2 R:R):
+                  </span>
+                  <span className="font-bold text-emerald-600">
+                    ${stockDetails ? (stockDetails.target_price * tradeQty).toLocaleString("en-US", { minimumFractionDigits: selectedAssetSymbol.endsWith("=X") ? 5 : 2 }) : "0.00"}
+                    <span className="text-[10px] text-slate-400 ml-1 font-medium">(${stockDetails ? stockDetails.target_price : "0.00"}/unit)</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Initiate Order dispatcher */}
+              <button 
+                onClick={handleInitiateBuy}
+                disabled={isOrdering || isLoadingHistory}
+                className={`w-full py-3 bg-primary hover:bg-opacity-95 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-primary/20 ${isOrdering ? "opacity-60 cursor-not-allowed" : ""}`}
+              >
+                {isOrdering ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <TrendingUp className="w-4 h-4" />
+                )}
+                <span>INITIATE AUTOMATED BUY NODE</span>
+              </button>
             </div>
           </div>
 

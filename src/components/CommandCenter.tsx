@@ -20,8 +20,10 @@ import {
   MarketAsset, 
   SecuritySignal, 
   ExecutionLog, 
-  TradingBotStrategy 
+  TradingBotStrategy,
+  PositionItem
 } from "../types";
+import { Trash2, AlertOctagon } from "lucide-react";
 
 interface CommandCenterProps {
   assets: MarketAsset[];
@@ -29,6 +31,8 @@ interface CommandCenterProps {
   executionFeed: ExecutionLog[];
   activeBotsCount: number;
   deployedBots: TradingBotStrategy[];
+  positions: PositionItem[];
+  portfolioFinancials: any;
   onNavigateToIntelligence: (assetSymbol: string) => void;
   onNavigateToStrategy: () => void;
 }
@@ -39,9 +43,48 @@ export default function CommandCenter({
   executionFeed,
   activeBotsCount,
   deployedBots,
+  positions,
+  portfolioFinancials,
   onNavigateToIntelligence,
   onNavigateToStrategy,
 }: CommandCenterProps) {
+  const [isLiquidating, setIsLiquidating] = useState<string | null>(null);
+
+  const formatPrice = (price: number | undefined | null, isFx: boolean) => {
+    if (price === undefined || price === null) return "0.00";
+    return price.toLocaleString("en-US", {
+      minimumFractionDigits: isFx ? 5 : 2,
+      maximumFractionDigits: isFx ? 5 : 2,
+    });
+  };
+
+  const handleLiquidate = async (ticker: string, currentPrice: number, qty: number, name: string) => {
+    setIsLiquidating(ticker);
+    try {
+      const response = await fetch("/api/trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker,
+          name,
+          qty,
+          price: currentPrice,
+          side: "SELL"
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        // Show a nice temporary in-app message
+        console.log(`Successfully liquidated ${ticker}`);
+      } else {
+        alert(data.detail || data.message || `Failed to liquidate position for ${ticker}.`);
+      }
+    } catch (err) {
+      console.error("Error liquidating position:", err);
+    } finally {
+      setIsLiquidating(null);
+    }
+  };
   // AI insight module interactive states
   const [userQuery, setUserQuery] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -119,11 +162,13 @@ export default function CommandCenter({
             
             <div className="text-right">
               <span className="text-2xl md:text-3xl font-black font-sans text-primary select-all">
-                +$12,482.50
+                ${portfolioFinancials?.equity?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "100,000.00"}
               </span>
-              <div className="flex items-center justify-end gap-1 text-secondary mt-1">
-                <TrendingUp className="w-4 h-4" />
-                <span className="text-xs font-semibold tracking-wide">14.2% (24h)</span>
+              <div className={`flex items-center justify-end gap-1 mt-1 ${portfolioFinancials?.unrealized_pnl >= 0 ? "text-secondary" : "text-rose-500"}`}>
+                {portfolioFinancials?.unrealized_pnl >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+                <span className="text-xs font-semibold tracking-wide">
+                  {portfolioFinancials?.unrealized_pnl >= 0 ? "+" : ""}${portfolioFinancials?.unrealized_pnl?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"} P&L
+                </span>
               </div>
             </div>
           </div>
@@ -183,18 +228,18 @@ export default function CommandCenter({
             </div>
             <div>
               <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
-                Total Profit
+                Available Cash
               </p>
               <p className="text-xl md:text-2xl font-bold text-on-surface font-mono">
-                $142.8k
+                ${portfolioFinancials?.cash?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "100,000.00"}
               </p>
             </div>
             <div>
               <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
-                Daily Yield
+                Unrealized P&L
               </p>
-              <p className="text-xl md:text-2xl font-bold text-secondary font-mono">
-                2.8%
+              <p className={`text-xl md:text-2xl font-bold font-mono ${portfolioFinancials?.unrealized_pnl >= 0 ? "text-secondary" : "text-rose-500"}`}>
+                {portfolioFinancials?.unrealized_pnl >= 0 ? "+" : ""}${portfolioFinancials?.unrealized_pnl?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}
               </p>
             </div>
           </div>
@@ -438,9 +483,111 @@ export default function CommandCenter({
             )}
           </form>
 
+      </div>
+    </div>
+
+      {/* Active Portfolio Holdings Table */}
+      <div className="glass-card rounded-2xl p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-on-surface">Active Portfolio Holdings</h3>
+              <p className="text-xs text-on-surface-variant">Real-time open positions & automatic exit parameters</p>
+            </div>
+          </div>
+          <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-bold rounded-full">
+            {positions.length} Active Nodes
+          </span>
         </div>
 
+        {positions.length === 0 ? (
+          <div className="py-12 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+            <AlertOctagon className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-on-surface-variant">No active positions found.</p>
+            <p className="text-xs text-slate-400 mt-1">Initiate a buy order in Market Intelligence to begin automated tracking.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest border-b border-slate-100">
+                  <th className="pb-3 pl-2">Asset</th>
+                  <th className="pb-3">Quantity</th>
+                  <th className="pb-3">Buy / Current Price</th>
+                  <th className="pb-3">Stops (Initial / Trailing)</th>
+                  <th className="pb-3">Target Sell</th>
+                  <th className="pb-3">Total Value</th>
+                  <th className="pb-3">P&L</th>
+                  <th className="pb-3 text-right pr-2">Action</th>
+                </tr>
+              </thead>
+              <tbody className="text-xs">
+                {positions.map((pos) => {
+                  const isFx = pos.ticker.endsWith("=X");
+                  const isProfit = pos.pnl >= 0;
+                  return (
+                    <tr key={pos.ticker} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors group">
+                      <td className="py-4 pl-2 font-semibold text-on-surface flex items-center gap-2">
+                        <div className="w-7 h-7 bg-primary/10 rounded-full flex items-center justify-center font-mono font-bold text-[10px] text-primary">
+                          {pos.ticker.split("=")[0].slice(0, 3)}
+                        </div>
+                        <div>
+                          <span className="font-semibold block">{pos.ticker}</span>
+                          <span className="text-[10px] text-on-surface-variant block truncate max-w-[120px]">{pos.name}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 font-mono font-semibold text-on-surface">
+                        {pos.qty.toLocaleString()}
+                      </td>
+                      <td className="py-4 font-mono">
+                        <span className="text-slate-400 font-medium">${formatPrice(pos.buy_price, isFx)}</span>
+                        <span className="mx-1.5 text-slate-300">/</span>
+                        <span className="text-on-surface font-bold text-scale-pulse">${formatPrice(pos.current_price, isFx)}</span>
+                      </td>
+                      <td className="py-4 font-mono text-[11px]">
+                        <span className="text-rose-500 font-semibold">${formatPrice(pos.initial_stop, isFx)}</span>
+                        <span className="mx-1.5 text-slate-300">|</span>
+                        <span className="text-amber-500 font-semibold">${formatPrice(pos.trailing_stop, isFx)}</span>
+                      </td>
+                      <td className="py-4 font-mono font-semibold text-emerald-600">
+                        ${formatPrice(pos.target_price, isFx)}
+                      </td>
+                      <td className="py-4 font-mono font-bold text-on-surface">
+                        ${pos.value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-4 font-mono font-bold">
+                        <span className={`flex items-center gap-0.5 ${isProfit ? "text-secondary" : "text-rose-600"}`}>
+                          {isProfit ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+                          <span>{isProfit ? "+" : ""}${pos.pnl.toLocaleString("en-US", { minimumFractionDigits: 2 })} ({isProfit ? "+" : ""}{pos.pnl_percent.toFixed(2)}%)</span>
+                        </span>
+                      </td>
+                      <td className="py-4 text-right pr-2">
+                        <button
+                          onClick={() => handleLiquidate(pos.ticker, pos.current_price, pos.qty, pos.name)}
+                          disabled={isLiquidating === pos.ticker}
+                          className="p-1.5 bg-rose-50 border border-rose-100 hover:bg-rose-100/70 text-rose-600 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1 font-semibold ml-auto"
+                          title="Liquidate Node Position"
+                        >
+                          {isLiquidating === pos.ticker ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-0.5">Liquidate</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
     </div>
   );
 }
